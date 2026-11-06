@@ -1,0 +1,17 @@
+{
+  "name": "Taxi Radar",
+  "short_name": "Taxi Radar",
+  "description": "Predicción de servicios de taxi en Chala",
+  "start_url": "./#/ahora",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14130f",
+  "theme_color": "#14130f",
+  "lang": "es",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

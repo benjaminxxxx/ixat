@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Taxi Radar</title>
+  <meta name="description" content="Predicción de servicios de taxi en Chala">
+  <meta name="theme-color" content="#14130f">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo"></span>Taxi Radar</div>
+    <div id="clock" class="clock"></div>
+  </header>
+  <main id="view"></main>
+  <nav class="tabs">
+    <a href="#/ahora" data-tab="ahora"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Ahora</a>
+    <a href="#/analisis" data-tab="analisis"><svg viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>Análisis</a>
+    <a href="#/clientes" data-tab="clientes"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/></svg>Clientes</a>
+    <a href="#/zonas" data-tab="zonas"><svg viewBox="0 0 24 24"><path d="M12 21s-7-6.5-7-12a7 7 0 0 1 14 0c0 5.5-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>Zonas</a>
+    <a href="#/datos" data-tab="datos"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>Datos</a>
+  </nav>
+  <div id="tip" class="tip" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

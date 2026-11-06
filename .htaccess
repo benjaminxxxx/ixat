@@ -1,0 +1,7 @@
+# Archivos de la app: el navegador siempre pregunta si hay versión nueva (responde rápido si no cambió).
+# Evita que se mezclen archivos viejos y nuevos después de una actualización.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(html|js|css|webmanifest)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>

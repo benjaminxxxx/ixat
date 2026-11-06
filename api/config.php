@@ -8,10 +8,10 @@ return [
         'pass' => '',
     ],
     // Clave que pide la app la primera vez (cámbiala por una larga).
-    'token' => 'b830a16b04dc0efa',
+    'token' => 'masnaki18',
     // Se generan con: php api/setup.php
     'vapid' => [
-        'subject' => 'mailto:tu-correo@ejemplo.com',
+        'subject' => 'mailto:benuserxxx@gmail.com',
         'public' => 'BL0veB6DBBSBzayZPkjf9T87uOPMOpkeWJARLRVVgNnX9itKtcT2b54-NlihO8vcSGyn3OjjccZWJHhuHPE-dWc',
         'private' => 'Q8h2QiIrbGsIdpP2cyJaEPAHe4xESuiUH1R1Jieu19Y',
     ],

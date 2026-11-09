@@ -2,6 +2,7 @@ import { loadSnapshot } from '../app.js';
 import { $, $$, esc, limaNow, hourLabel, pct, num, soles, cap, WD_LONG, bindTips, wdPlural } from '../util.js';
 import { zoneIndex, zoneLabel, goLink, noData, hourBars, placePoint } from './common.js';
 import { loadLibs } from './zonas.js';
+import { waitTable } from './wait.js';
 
 const METRICS = {
   soles: { label: 'S/ por taxista', unit: 'soles por taxista por hora', get: x => x.solesPerDriver, fmt: v => 'S/ ' + v.toFixed(1) },
@@ -49,6 +50,11 @@ export async function renderAnalisis(view) {
     <section class="card">
       <h2>Pedidos por día y hora</h2>
       ${heatmap(snap.heatmap)}
+    </section>
+
+    <section class="card">
+      <h2>Dónde esperar</h2>
+      ${waitTable(snap, zones)}
     </section>
 
     <section class="card">

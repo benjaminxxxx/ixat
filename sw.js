@@ -1,11 +1,11 @@
 // Service worker: abre la app sin señal, guarda el último análisis y muestra los avisos.
-const VERSION = 'v10';
+const VERSION = 'v11';
 const SHELL = `shell-${VERSION}`;
 const RUNTIME = 'runtime';
 const FILES = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon-192.png',
   'js/app.js', 'js/api.js', 'js/util.js', 'js/push.js', 'js/parser.js', 'js/processor.js', 'js/worker.js', 'js/seedZones.js', 'js/naming.js', 'js/homes.js', 'js/events.js',
-  'js/views/common.js', 'js/views/ahora.js', 'js/views/analisis.js', 'js/views/clientes.js', 'js/views/zonas.js', 'js/views/datos.js', 'js/views/eventos.js',
+  'js/views/common.js', 'js/views/ahora.js', 'js/views/analisis.js', 'js/views/clientes.js', 'js/views/zonas.js', 'js/views/datos.js', 'js/views/eventos.js', 'js/views/wait.js',
 ];
 
 self.addEventListener('install', e => {

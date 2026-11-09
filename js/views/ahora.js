@@ -5,6 +5,7 @@ import { zoneIndex, zoneLabel, goLink, homeLink, noData, hourBars, searchPlaces,
 import { pushStatus, enablePush, pushSupported } from '../push.js';
 import { loadHomes, loadNames } from '../homes.js';
 import { occurrences, slots, minToTime } from '../events.js';
+import { renderWaitCard } from './wait.js';
 
 const AHEAD_MIN = 120; // mostrar lo que viene en las próximas 2 horas
 const BEHIND_MIN = 15; // y lo que debió pasar hace poco
@@ -21,7 +22,9 @@ export async function renderAhora(view) {
       <input type="search" id="placeQ" placeholder="🔎 Buscar lugar, apodo o número…" autocomplete="off">
       <div id="placeRes" class="list"></div>
     </section>
+    <section class="card" id="waitCard"></section>
     <div id="live"></div>`;
+  const drawWait = renderWaitCard($('#waitCard'), snap, zones);
 
   const placeRow = z => {
     const parent = z.kind === 'lugar' && z.parent >= 0 ? zones.get(z.parent) : null;
@@ -55,10 +58,12 @@ export async function renderAhora(view) {
 
   const draw = async () => {
     const n = limaNow();
-    // Hábitos activos que tocan hoy (o mañana temprano) dentro de la ventana.
+    // Hábitos que tocan hoy (o mañana temprano) dentro de la ventana. Solo los confiables:
+    // los que llamaron en la mayoría de sus días recientes (probado: aciertan ~4 de cada 10).
+    const P = snap.config.pattern;
     const upcoming = [];
     for (const p of snap.patterns) {
-      if (p.status !== 'activo') continue;
+      if (p.status !== 'activo' || (p.prob ?? 1) < (P.minProb ?? 0) || (p.seen && p.seen[1] < 2)) continue;
       const d = minutesUntil(p.minute, n.mod);
       if (d < -BEHIND_MIN || d > AHEAD_MIN) continue;
       const wd = n.mod + d >= 1440 ? (n.wd + 1) % 7 : n.mod + d < 0 ? (n.wd + 6) % 7 : n.wd;
@@ -91,18 +96,19 @@ export async function renderAhora(view) {
         <div class="list">${evToday.map(x => eventItem(x, zones, lift)).join('')}</div>
       </section>` : ''}
       <section class="card">
-        <div class="card-head"><h2>Próximos clientes</h2><span class="sub">próx. 2 horas</span></div>
+        <div class="card-head"><h2>Clientes habituales</h2><span class="sub">próx. 2 horas</span></div>
         ${upcoming.length ? `<div class="list">${upcoming.map(p => item(p, zones, homes.get(p.phone), names)).join('')}</div>`
-          : `<div class="empty"><b>Nada fijo en las próximas 2 horas</b>Ningún cliente habitual suele llamar en este rato. Mira abajo dónde hay más pedidos.</div>`}
+          : `<div class="empty"><b>Ninguno confiable en las próximas 2 horas</b>Guíate por “Dónde esperar”.</div>`}
+        <p class="small muted">Ayuda extra, no segura: estos avisos aciertan ~4 de cada 10 (fines de semana ~2).</p>
       </section>
 
       <section class="card">
-        <div class="card-head"><h2>Dónde ponerse ahora</h2><span class="sub">${wdPark ? dayName + ' ' : ''}${n.h}:00–${n.h + 1}:00</span></div>
+        <div class="card-head"><h2>De dónde salen los pedidos</h2><span class="sub">${wdPark ? dayName + ' ' : ''}${n.h}:00–${n.h + 1}:00</span></div>
         ${park.length ? `<table>
-          <tr><th>Zona</th><th>Pedidos/día</th><th>Éxito libres</th><th>Espera</th><th></th></tr>
-          ${park.slice(0, 5).map(r => `<tr><td>${zoneLabel(zones, r.zone)}</td><td>${num(r.callsPerDay, 1)}</td><td>${pct(r.successRate)}</td><td>${r.medianWait == null ? '—' : num(r.medianWait, 0) + ' min'}</td><td>${goLink(zones, r.zone)}</td></tr>`).join('')}
+          <tr><th style="text-align:left">Zona</th><th>Pedidos/día</th><th></th></tr>
+          ${park.slice(0, 5).map(r => `<tr><td style="text-align:left">${zoneLabel(zones, r.zone)}</td><td>${num(r.callsPerDay, 1)}</td><td>${goLink(zones, r.zone)}</td></tr>`).join('')}
         </table>
-        <p class="small muted">Pedidos/día: cuántos piden recojo en esa zona ${wdPark ? `los ${wdPlural(n.wd)} ` : ''}a esta hora. Éxito: de los taxistas que se reportaron libres ahí, cuántos consiguieron servicio.</p>`
+        <p class="small muted">Cuántos piden recojo en esa zona ${wdPark ? `los ${wdPlural(n.wd)} ` : ''}a esta hora. Que salgan muchos pedidos no significa que convenga esperar ahí: puede haber muchos taxis (mira “Dónde esperar”).</p>`
           : `<p class="sub">Aún no hay zonas con datos a esta hora. Registra zonas en <a href="#/zonas">Zonas</a>.</p>`}
       </section>
 
@@ -127,7 +133,7 @@ export async function renderAhora(view) {
   };
 
   await draw();
-  const timer = setInterval(draw, 30000);
+  const timer = setInterval(() => { draw(); drawWait && drawWait(); }, 30000);
   return () => clearInterval(timer);
 }
 
@@ -148,7 +154,7 @@ function item(p, zones, home, names) {
     <div class="time">${hhmm(p.minute)}<small>${when}</small></div>
     <div class="grow">
       <div><b>${home ? '🏠 ' : ''}${zoneLabel(zones, p.zone, p.place, p.spot)}</b></div>
-      <div class="small sub"><a href="#/cliente/${p.phone}">${who(p.phone, names)}</a> · ${pct(p.confidence)} de sus días · ${p.hits} veces · últ. ${shortDate(p.last)}</div>
+      <div class="small sub"><a href="#/cliente/${p.phone}">${who(p.phone, names)}</a> · ${p.seen ? `llamó ${p.seen[0]} de sus últimos ${p.seen[1]} días` : pct(p.confidence) + ' de sus días'} · últ. ${shortDate(p.last)}</div>
       <div class="small muted">Ventana ${hhmm(p.from)}–${hhmm(p.to)}</div>
     </div>
     <div style="display:grid;gap:4px">${homeLink(home)}${home ? zoneBtn.replace('Ir ↗', 'Zona ↗') : zoneBtn}</div>

@@ -4,7 +4,7 @@
 
 import { occurrences, slots } from './events.js';
 
-export const LOGIC_VERSION = 4;
+export const LOGIC_VERSION = 5;
 
 export const CONFIG = {
   dispatchers: ['Transporte Los 5 De Oro', '+51 965 134 127'],
@@ -29,7 +29,12 @@ export const CONFIG = {
     toleranceMin: 10,       // tolerancia de tardanza
     missesToDrop: 4,        // faltas seguidas para marcarlo "dejó de llamar"
     staleDays: 14,          // sin datos a esa hora en 14 días = "sin datos recientes"
+    recentDays: 21,         // si no llamó en las últimas 3 semanas ya no se avisa (medido: 2-7% de acierto)
+    probWeeks: 6,           // la probabilidad se mide con las últimas 6 semanas
+    minProb: 0.6,           // probado: con 0.6 acierta ~40% (antes 20%); por debajo casi nunca
   },
+  // Costo de moverse: GLP del Suzuki Alto (190 km con S/ 53.77) y velocidad promedio en Chala.
+  fuel: { solesPerKm: 0.283, kmh: 25 },
 };
 
 // ---------- utilidades ----------
@@ -440,6 +445,32 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
     return rows.slice(0, 6);
   }));
 
+  // ---------- dónde esperar ----------
+  // Servicios por hora de espera en cada zona: de los reportes "libre en X" hasta la confirmación.
+  // Mide cuánto se tarda de verdad en conseguir servicio esperando ahí (no solo cuántos pedidos salen).
+  // Con pocos datos, el valor se acerca al promedio. Probado con días pasados: esperar en las 3 zonas
+  // mejor puntuadas dio ~28% más servicios por hora que el resto (y que Llamosas).
+  const BANDS = [[0, 7], [7, 12], [12, 16], [16, 20], [20, 24]];
+  const bandOf = h => BANDS.findIndex(([a, b]) => h >= a && h < b);
+  const epHours = e => (e.won ? Math.max(e.wait, 0.5) : e.tLast - e.t0 + 5) / 60;
+  const gW = Array(5).fill(0), gT = Array(5).fill(0);
+  const zw = new Map();
+  for (const e of episodes) {
+    if (!e.driver || e.zone < 0) continue;
+    const b = bandOf(e.h), t = epHours(e), w = e.won ? 1 : 0;
+    gW[b] += w; gT[b] += t;
+    if (!zw.has(e.zone)) zw.set(e.zone, { n: 0, w: 0, t: 0, bw: Array(5).fill(0), bt: Array(5).fill(0), bn: Array(5).fill(0) });
+    const o = zw.get(e.zone);
+    o.n++; o.w += w; o.t += t; o.bw[b] += w; o.bt[b] += t; o.bn[b]++;
+  }
+  const gRate = gW.reduce((a, x) => a + x, 0) / (gT.reduce((a, x) => a + x, 0) || 1);
+  const waitSpots = [...zw.entries()].filter(([, o]) => o.n >= 100).map(([zone, o]) => {
+    // Solo zonas con 100+ esperas (con menos, sale ruido); se acerca al promedio con 10 horas de peso.
+    const rate = (o.w + 10 * gRate) / (o.t + 10);
+    return { zone, n: o.n, rate: +rate.toFixed(2), bands: BANDS.map((_, b) => +((o.bw[b] + 3 * rate) / (o.bt[b] + 3)).toFixed(2)), bandN: o.bn };
+  }).sort((a, b) => b.rate - a.rate || a.zone - b.zone);
+  const waitInfo = { bands: BANDS, global: BANDS.map((_, b) => +(gW[b] / (gT[b] || 1)).toFixed(2)), rate: +gRate.toFixed(2) };
+
   // Lugares que no caen en ninguna zona (para que los asignes).
   const unmatched = new Map();
   for (const c of allCalls) if (c.zone < 0 && c.place) unmatched.set(c.place, (unmatched.get(c.place) || 0) + 1);
@@ -526,13 +557,26 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
       // Sin datos del chat a esa hora en las últimas semanas: no se puede confirmar que siga llamando.
       else if (dataEnd && addDays(lastChecked, P.staleDays) < dataEnd) status = 'sin_datos';
 
+      // Si no llamó en las últimas semanas, ya no es un hábito vigente aunque falten datos para confirmarlo.
+      const since = dataEnd ? Math.round((Date.parse(dataEnd) - Date.parse(last)) / 864e5) : 0;
+      if (status === 'activo' && since > P.recentDays) status = 'sin_datos';
+      // Probabilidad real: de los días recientes (de los que suele llamar) con datos a esa hora, en cuántos llamó.
+      const hitDates = new Set(hits.map(o => o.date));
+      let elig = 0, got2 = 0;
+      for (let d = addDays(dataEnd || last, -7 * P.probWeeks); dataEnd && d <= dataEnd; d = addDays(d, 1)) {
+        if (!wds.includes(tsInfo(d + ' 00:00:00').wd) || !coveredNear(d, modOfDay)) continue;
+        elig++;
+        if (hitDates.has(d)) got2++;
+      }
+      const prob = +((got2 + 0.5) / (elig + 1.5)).toFixed(2);
+
       const zone = mode(hits.filter(o => o.zone >= 0).map(o => o.zone)) ?? -1;
       const spot = mode(hits.filter(o => o.spot >= 0).map(o => o.spot)) ?? -1;
       const place = mode(hits.filter(o => o.place).map(o => o.place)) || client.place;
       const pat = {
         key: phone + '@' + modOfDay, phone, minute: modOfDay,
         from: (((p10 - P.toleranceMin) % 1440) + 1440) % 1440, to: (((p90 + P.toleranceMin) % 1440) + 1440) % 1440,
-        days: wds, hits: hits.length, confidence: +confidence.toFixed(3), first, last, misses, status, zone, spot, place,
+        days: wds, hits: hits.length, confidence: +confidence.toFixed(3), prob, seen: [got2, elig], since, first, last, misses, status, zone, spot, place,
         recent: hits.slice(-8).map(o => o.date),
       };
       patterns.push(pat);
@@ -545,14 +589,15 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
   // ---------- agenda de avisos (la usa el cron del servidor) ----------
   const zoneName = new Map(zones.map(z => [z.id, z.name]));
   const fmt = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
-  const alerts = patterns.filter(p => p.status === 'activo').map(p => {
+  const got2Of = p => `${p.seen[0]} de ${p.seen[1]} días`;
+  const alerts = patterns.filter(p => p.status === 'activo' && p.prob >= P.minProb && p.seen[1] >= 2).map(p => {
     let minute = p.minute - P.leadMin, days = p.days;
     if (minute < 0) { minute += 1440; days = days.map(w => (w + 6) % 7); }
     const where = p.spot >= 0 ? zoneName.get(p.spot) + (p.zone !== p.spot ? ` (${zoneName.get(p.zone)})` : '') : p.zone >= 0 ? zoneName.get(p.zone) : (p.place || 'lugar sin zona');
     return {
       key: p.key, minute, days,
       title: `📍 ${where} · en ~${P.leadMin} min`,
-      body: `${p.phone.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3')} suele llamar a las ${fmt(p.minute)} (${Math.round(p.confidence * 100)}% de sus días, ${p.hits} veces)`,
+      body: `${p.phone.replace(/(\d{3})(\d{3})(\d{3})/, '$1 $2 $3')} suele llamar a las ${fmt(p.minute)} · llamó ${got2Of(p)} últimamente`,
       url: './#/cliente/' + p.phone,
       phone: p.phone,
     };
@@ -615,10 +660,13 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
   const chatSummary = {};
   for (const m of msgs) { const s = chatSummary[m.chat] ||= { messages: 0, first: m.date, last: m.date }; s.messages++; if (m.date > s.last) s.last = m.date; if (m.date < s.first) s.first = m.date; }
 
+  // Para pruebas de acierto (backtest): datos internos sin compactar.
+  if (extra.debug) extra.debug.out = { allCalls, episodes, libres, covered, senderName };
+
   return {
     version: LOGIC_VERSION,
     generatedAt: new Date().toISOString(),
-    config: { fare: cfg.fare, shifts: cfg.shifts, myShift: cfg.myShift, pattern: cfg.pattern, me: cfg.me.driver },
+    config: { fare: cfg.fare, shifts: cfg.shifts, myShift: cfg.myShift, pattern: cfg.pattern, me: cfg.me.driver, fuel: cfg.fuel },
     summary: {
       messages: msgs.length, calls: allCalls.length, services: services.length, cancelled: allCalls.filter(c => c.cancelled).length,
       unconfirmed: allCalls.filter(c => !c.driver).length, clients: byPhone.size, dataStart, dataEnd, chats: chatSummary,
@@ -626,7 +674,7 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
       mappedSenders: senderName.size, zonedCalls: allCalls.filter(c => c.zone >= 0).length,
     },
     zones: zones.map(z => ({ id: z.id, name: z.name, aliases: z.aliases || [], kind: z.kind || 'zona', color: z.color, polygon: z.polygon, lat: z.lat ?? null, lng: z.lng ?? null, parent: spotParent.get(z.id) ?? -1, calls: zoneCounts[z.id] || 0, direct: directCounts[z.id] || 0 })),
-    hourly, heatmap, heatCov, shifts, nap, drivers, parking, parkingWd, spotHeat, unmatchedPlaces, patterns, alerts, me: meStats,
+    hourly, heatmap, heatCov, shifts, nap, drivers, parking, parkingWd, spotHeat, waitSpots, waitInfo, unmatchedPlaces, patterns, alerts, me: meStats,
     events, eventStats,
     clients: clients.slice(0, 1500),
     dict: { phones, places, drivers: driverNames, chats },

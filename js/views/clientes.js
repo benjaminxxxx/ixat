@@ -122,7 +122,7 @@ export async function renderCliente(view, phone) {
 
     ${pats.map(p => `<section class="card">
       <div class="card-head"><h2>Suele llamar ${hhmm(p.minute)}</h2>${STATUS[p.status]}</div>
-      <div class="row">${daysChips(p.days)} <span class="sub">${pct(p.confidence)} de esos días · ${p.hits} veces</span></div>
+      <div class="row">${daysChips(p.days)} <span class="sub">${p.seen ? `llamó ${p.seen[0]} de sus últimos ${p.seen[1]} días` : pct(p.confidence) + ' de esos días'} · ${p.hits} veces en total</span></div>
       <p class="sub">Ventana ${hhmm(p.from)}–${hhmm(p.to)} · ${zoneLabel(zones, p.zone, p.place, p.spot)} · desde ${shortDate(p.first)} hasta ${shortDate(p.last)}${p.misses ? ` · faltó ${p.misses} veces seguidas desde entonces` : ''}</p>
       <div class="row">${goLink(zones, p.zone, p.spot)}</div>
     </section>`).join('')}

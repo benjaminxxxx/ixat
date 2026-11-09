@@ -30,7 +30,8 @@ App web instalable (PWA) que lee los chats de WhatsApp del grupo de taxis, saca 
    - Luego toca **Reprocesar**.
 4. **Casa del cliente**: en la ficha del cliente, al llegar a recogerlo toca **Estoy en su casa**. Desde entonces sus avisos dicen "Casa de…" y al tocarlos abren Google Maps directo a su puerta.
 5. **Eventos** (Análisis → 🎉 Eventos): aniversarios, fiestas, feriados (botón para cargar los de Perú). Avisa 1 hora antes y, con el historial, muestra cuánto suben los pedidos. Reprocesa después de agregar eventos.
-6. **Ahora** usa el día de la semana: los sábados en la noche se comparan con otros sábados, no con el promedio. Arriba tiene un buscador de lugares con botón al mapa.
+6. **Dónde esperar** (arriba en Ahora): eliges dónde estás (o GPS) y te dice si quedarte o moverte, con minutos esperados, km y costo de GLP. Se mide con los reportes "libre" del chat (servicios por hora de espera por zona). El costo por km está en `CONFIG.fuel` de `js/processor.js`.
+7. **Ahora** usa el día de la semana: los sábados en la noche se comparan con otros sábados, no con el promedio. Arriba tiene un buscador de lugares con botón al mapa.
 
 ## Subir al hosting (Hostinger o cPanel)
 

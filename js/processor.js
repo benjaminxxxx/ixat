@@ -4,7 +4,7 @@
 
 import { occurrences, slots } from './events.js';
 
-export const LOGIC_VERSION = 5;
+export const LOGIC_VERSION = 7;
 
 export const CONFIG = {
   dispatchers: ['Transporte Los 5 De Oro', '+51 965 134 127'],
@@ -189,6 +189,7 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
   const { locate, parent: spotParent } = makeLocator(zones);
   const calls = [];
   const libres = [];
+  const ocupados = []; // "ocupado" de un taxista: subió a un cliente (al paso, propio o de la central)
   const pendingByChat = new Map();
 
   for (const m of msgs) {
@@ -220,6 +221,12 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
           if (calls[i].chat === m.chat) { calls[i].cancelled = true; break; }
         }
       }
+      continue;
+    }
+    // "Ocupado": el taxista consiguió pasajero. Si no fue de la central, fue un cliente al paso
+    // (como en el paradero). Se excluye "ocupado central" y salidas a comer.
+    if (/^(aun |todavia |ya |sigo )?ocupad/.test(m.n) && !/central|almorz|desayun|cenar|comer/.test(m.n)) {
+      ocupados.push({ chat: m.chat, sender: m.sender, t: m.t });
       continue;
     }
     // Taxistas reportándose libres.
@@ -293,20 +300,28 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
   const servicesByDriver = new Map();
   for (const s of services) { if (!servicesByDriver.has(s.driver)) servicesByDriver.set(s.driver, []); servicesByDriver.get(s.driver).push(s); }
   const episodes = [];
+  const ocupBySender = new Map();
+  for (const o of ocupados) { if (!ocupBySender.has(o.sender)) ocupBySender.set(o.sender, []); ocupBySender.get(o.sender).push(o); }
   for (const [sender, list] of [...libresBySender.entries()].sort()) {
     const name = senderName.get(sender) || null;
     const svc = name ? servicesByDriver.get(name) || [] : [];
+    const ocup = ocupBySender.get(sender) || [];
     let ep = null;
     const close = () => {
       if (!ep) return;
       const won = svc.find(s => s.chat === ep.chat && s.confirmT >= ep.t0 && s.confirmT <= ep.tLast + 10);
-      ep.won = !!won;
-      ep.wait = won ? won.confirmT - ep.t0 : null;
+      // Sin confirmación de la central pero dijo "ocupado": consiguió cliente al paso.
+      const paso = won ? null : ocup.find(o => o.chat === ep.chat && o.t >= ep.t0 && o.t <= ep.tLast + 15);
+      ep.won = !!(won || paso);
+      ep.paso = !!paso;
+      ep.wait = won ? won.confirmT - ep.t0 : paso ? paso.t - ep.t0 : null;
       episodes.push(ep);
       ep = null;
     };
     for (const l of list) {
-      if (ep && (l.chat !== ep.chat || l.t - ep.tLast > cfg.libreGapMin || svc.some(s => s.chat === ep.chat && s.confirmT > ep.t0 && s.confirmT < l.t))) close();
+      if (ep && (l.chat !== ep.chat || l.t - ep.tLast > cfg.libreGapMin
+        || svc.some(s => s.chat === ep.chat && s.confirmT > ep.t0 && s.confirmT < l.t)
+        || ocup.some(o => o.chat === ep.chat && o.t > ep.tLast && o.t < l.t))) close();
       if (!ep) ep = { sender, driver: name, chat: l.chat, t0: l.t, tLast: l.t, h: l.h, zones: [], places: [] };
       ep.tLast = l.t;
       if (l.zone >= 0) ep.zones.push(l.zone);
@@ -459,15 +474,15 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
     if (!e.driver || e.zone < 0) continue;
     const b = bandOf(e.h), t = epHours(e), w = e.won ? 1 : 0;
     gW[b] += w; gT[b] += t;
-    if (!zw.has(e.zone)) zw.set(e.zone, { n: 0, w: 0, t: 0, bw: Array(5).fill(0), bt: Array(5).fill(0), bn: Array(5).fill(0) });
+    if (!zw.has(e.zone)) zw.set(e.zone, { n: 0, w: 0, t: 0, paso: 0, bw: Array(5).fill(0), bt: Array(5).fill(0), bn: Array(5).fill(0) });
     const o = zw.get(e.zone);
-    o.n++; o.w += w; o.t += t; o.bw[b] += w; o.bt[b] += t; o.bn[b]++;
+    o.n++; o.w += w; if (e.paso) o.paso++; o.t += t; o.bw[b] += w; o.bt[b] += t; o.bn[b]++;
   }
   const gRate = gW.reduce((a, x) => a + x, 0) / (gT.reduce((a, x) => a + x, 0) || 1);
   const waitSpots = [...zw.entries()].filter(([, o]) => o.n >= 100).map(([zone, o]) => {
     // Solo zonas con 100+ esperas (con menos, sale ruido); se acerca al promedio con 10 horas de peso.
     const rate = (o.w + 10 * gRate) / (o.t + 10);
-    return { zone, n: o.n, rate: +rate.toFixed(2), bands: BANDS.map((_, b) => +((o.bw[b] + 3 * rate) / (o.bt[b] + 3)).toFixed(2)), bandN: o.bn };
+    return { zone, n: o.n, paso: o.w ? +(o.paso / o.w).toFixed(2) : 0, rate: +rate.toFixed(2), bands: BANDS.map((_, b) => +((o.bw[b] + 3 * rate) / (o.bt[b] + 3)).toFixed(2)), bandN: o.bn };
   }).sort((a, b) => b.rate - a.rate || a.zone - b.zone);
   const waitInfo = { bands: BANDS, global: BANDS.map((_, b) => +(gW[b] / (gT[b] || 1)).toFixed(2)), rate: +gRate.toFixed(2) };
 
@@ -490,6 +505,16 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
   const clients = [];
   const P = cfg.pattern;
   const coveredNear = (date, mod) => { const h = Math.floor(mod / 60); return isCovered(date, h) || isCovered(date, (h + 23) % 24) || isCovered(date, (h + 1) % 24); };
+  const lastCoveredCache = new Map();
+  const lastCoveredNear = mod => {
+    const h = Math.floor(mod / 60);
+    if (!lastCoveredCache.has(h)) {
+      let found = dataEnd;
+      for (let d = dataEnd, i = 0; d && i < 400; d = addDays(d, -1), i++) if (coveredNear(d, mod)) { found = d; break; }
+      lastCoveredCache.set(h, found);
+    }
+    return lastCoveredCache.get(h);
+  };
 
   for (const [phone, list] of [...byPhone.entries()].sort()) {
     const svc = list.filter(c => c.driver && !c.cancelled);
@@ -544,9 +569,12 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
       const confidence = gotSel / eligSel;
       if (confidence < P.minConfidence) continue;
 
+      // Fecha de referencia: el último día con datos del chat a esa hora (no hoy, ni el otro chat).
+      // Si no subes chats por unos días, esos días no cuentan como faltas.
+      const refEnd = lastCoveredNear(modOfDay);
       // ¿Sigue llamando? Contar días esperados (con datos) después de la última llamada.
       let misses = 0, lastChecked = last;
-      for (let d = addDays(last, 1); dataEnd && d <= dataEnd; d = addDays(d, 1)) {
+      for (let d = addDays(last, 1); refEnd && d <= refEnd; d = addDays(d, 1)) {
         if (!coveredNear(d, modOfDay) || !wds.includes(tsInfo(d + ' 00:00:00').wd)) continue;
         misses++;
         lastChecked = d;
@@ -555,15 +583,15 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
       let status = 'activo';
       if (misses >= needMisses) status = 'inactivo';
       // Sin datos del chat a esa hora en las últimas semanas: no se puede confirmar que siga llamando.
-      else if (dataEnd && addDays(lastChecked, P.staleDays) < dataEnd) status = 'sin_datos';
+      else if (refEnd && addDays(lastChecked, P.staleDays) < refEnd) status = 'sin_datos';
 
       // Si no llamó en las últimas semanas, ya no es un hábito vigente aunque falten datos para confirmarlo.
-      const since = dataEnd ? Math.round((Date.parse(dataEnd) - Date.parse(last)) / 864e5) : 0;
+      const since = refEnd ? Math.round((Date.parse(refEnd) - Date.parse(last)) / 864e5) : 0;
       if (status === 'activo' && since > P.recentDays) status = 'sin_datos';
       // Probabilidad real: de los días recientes (de los que suele llamar) con datos a esa hora, en cuántos llamó.
       const hitDates = new Set(hits.map(o => o.date));
       let elig = 0, got2 = 0;
-      for (let d = addDays(dataEnd || last, -7 * P.probWeeks); dataEnd && d <= dataEnd; d = addDays(d, 1)) {
+      for (let d = addDays(refEnd || last, -7 * P.probWeeks); refEnd && d <= refEnd; d = addDays(d, 1)) {
         if (!wds.includes(tsInfo(d + ' 00:00:00').wd) || !coveredNear(d, modOfDay)) continue;
         elig++;
         if (hitDates.has(d)) got2++;
@@ -658,7 +686,7 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
   const callRows = allCalls.map(c => [c.t, phoneIdx.get(c.phone), c.zone, placeIdx.get(c.place), c.driver ? driverIdx.get(c.driver) : -1, chats.indexOf(c.chat), c.cancelled ? 1 : 0, c.spot]);
 
   const chatSummary = {};
-  for (const m of msgs) { const s = chatSummary[m.chat] ||= { messages: 0, first: m.date, last: m.date }; s.messages++; if (m.date > s.last) s.last = m.date; if (m.date < s.first) s.first = m.date; }
+  for (const m of msgs) { const s = chatSummary[m.chat] ||= { messages: 0, first: m.date, last: m.date, lastTs: m.ts }; s.messages++; if (m.date > s.last) s.last = m.date; if (m.date < s.first) s.first = m.date; if (m.ts > s.lastTs) s.lastTs = m.ts; }
 
   // Para pruebas de acierto (backtest): datos internos sin compactar.
   if (extra.debug) extra.debug.out = { allCalls, episodes, libres, covered, senderName };
@@ -667,6 +695,8 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
     version: LOGIC_VERSION,
     generatedAt: new Date().toISOString(),
     config: { fare: cfg.fare, shifts: cfg.shifts, myShift: cfg.myShift, pattern: cfg.pattern, me: cfg.me.driver, fuel: cfg.fuel },
+    // Último mensaje de cada chat: hasta ahí llegan los cálculos de ese horario.
+    dataUntil: Object.fromEntries(Object.entries(chatSummary).map(([k, v]) => [k, v.lastTs])),
     summary: {
       messages: msgs.length, calls: allCalls.length, services: services.length, cancelled: allCalls.filter(c => c.cancelled).length,
       unconfirmed: allCalls.filter(c => !c.driver).length, clients: byPhone.size, dataStart, dataEnd, chats: chatSummary,

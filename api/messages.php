@@ -4,6 +4,28 @@ require __DIR__ . '/lib.php';
 require_token();
 $pdo = db();
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['detect'])) {
+    // { messages: [[ts, sender, text, n], ...] } (una muestra) → cuántos ya existen en cada chat.
+    $b = body();
+    $out = [];
+    $chats = $pdo->query('SELECT DISTINCT chat FROM messages')->fetchAll(PDO::FETCH_COLUMN);
+    foreach ($chats as $chat) {
+        $uids = [];
+        foreach (array_slice((array) ($b['messages'] ?? []), 0, 500) as $m) {
+            [$ts, $sender, $text, $n] = (array) $m + [null, null, null, 0];
+            $ts = substr((string) $ts, 0, 16) . ':00';
+            $uids[] = sha1("$chat|$ts|$sender|$text|$n");
+        }
+        if (!$uids) {
+            continue;
+        }
+        $q = $pdo->prepare('SELECT COUNT(*) FROM messages WHERE uid IN (' . implode(',', array_fill(0, count($uids), '?')) . ')');
+        $q->execute($uids);
+        $out[$chat] = (int) $q->fetchColumn();
+    }
+    json_out(['sample' => min(500, count((array) ($b['messages'] ?? []))), 'matches' => $out]);
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // { chat, messages: [[ts, sender, text, n], ...] }  n = repetición del mismo mensaje en el mismo segundo
     $b = body();
@@ -19,11 +41,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!preg_match('/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/', (string) $ts)) {
             continue;
         }
+        $ts = substr((string) $ts, 0, 16) . ':00'; // sin segundos (ver js/parser.js)
         $uid = sha1("$chat|$ts|$sender|$text|$n");
         $stmt->execute([$chat, $ts, mb_substr((string) $sender, 0, 150), (string) $text, $uid]);
         $added += $stmt->rowCount();
     }
     $pdo->commit();
+    if ($added) {
+        mark_changed();
+    }
     json_out(['received' => count($b['messages']), 'added' => $added]);
 }
 

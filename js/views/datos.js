@@ -26,6 +26,22 @@ export async function runProcess(onStep = () => {}) {
   return snap;
 }
 
+// ¿Día o noche? 1) los mensajes que ya existen en la base; 2) el nombre del grupo (grupo 1 = día, grupo 2 = noche).
+async function detectChat(fileName, raw, parsed) {
+  const group = (raw.slice(0, 3000).match(/cre[oó] el grupo [“"](.+?)[”"]/) || fileName.match(/Chat de WhatsApp con (.+?)\.txt$/i) || [])[1] || '';
+  try {
+    const step = Math.max(1, Math.floor(parsed.length / 400));
+    const sample = parsed.filter((_, i) => i % step === 0).slice(0, 500).map(m => [m.ts, m.sender, m.text, m.n]);
+    const r = await api('messages.php?detect=1', { method: 'POST', body: { messages: sample } });
+    const [best, n] = Object.entries(r.matches).sort((a, b) => b[1] - a[1])[0] || [];
+    if (best && n >= Math.max(5, r.sample * 0.1)) return { chat: best, why: `ya tenía ${Math.round(100 * n / r.sample)}% de estos mensajes` };
+  } catch {}
+  const g = group || fileName;
+  if (/grupo\s*2|noche/i.test(g)) return { chat: 'noche', why: 'por el nombre: ' + g };
+  if (/grupo\s*1|d[ií]a|ma[ñn]ana/i.test(g)) return { chat: 'dia', why: 'por el nombre: ' + g };
+  return { chat: null, why: '' };
+}
+
 export async function renderDatos(view) {
   let summary = [], snap = null, authError = '';
   if (getToken()) {
@@ -40,9 +56,9 @@ export async function renderDatos(view) {
       <h2>Subir chat</h2>
       <p class="sub">Exporta el chat de WhatsApp <b>sin archivos</b> y sube el <b>.txt</b> completo. Los mensajes que ya estaban se ignoran solos, así que no hace falta recortar días.</p>
       <div style="display:grid;gap:10px">
-        <label class="field">¿Qué chat es?
-          <select id="chat"><option value="dia">Grupo de día</option><option value="noche">Grupo de noche</option></select></label>
         <input type="file" id="file" accept=".txt,text/plain">
+        <label class="field" id="chatField">Chat (se detecta solo; cámbialo solo si está mal)
+          <select id="chat"><option value="dia">Grupo de día</option><option value="noche">Grupo de noche</option></select></label>
         <div id="preview" class="sub"></div>
         <div class="progress" id="prog" hidden><div></div></div>
         <button class="btn primary" id="upload" disabled>Subir y procesar</button>
@@ -52,7 +68,8 @@ export async function renderDatos(view) {
     <section class="card">
       <div class="card-head"><h2>Base de datos</h2><span class="sub">${total.toLocaleString()} mensajes</span></div>
       ${summary.length ? `<table><tr><th>Chat</th><th>Mensajes</th><th>Desde</th><th>Hasta</th></tr>
-        ${summary.map(r => `<tr><td>${esc(r.chat)}</td><td>${(+r.n).toLocaleString()}</td><td>${esc(r.first.slice(0, 10))}</td><td>${esc(r.last.slice(0, 16))}</td></tr>`).join('')}</table>`
+        ${summary.map(r => `<tr><td>${esc(r.chat)}</td><td>${(+r.n).toLocaleString()}</td><td>${esc(r.first.slice(0, 10))}</td><td>${esc(r.last.slice(0, 16))}</td></tr>`).join('')}</table>
+      <p class="small muted">“Hasta” = último mensaje subido de cada chat. Los cálculos de cada horario llegan solo hasta ahí: los días sin subir no cuentan como que los clientes dejaron de llamar.</p>`
         : '<p class="sub">Vacía. Sube el primer chat.</p>'}
       <div class="hr"></div>
       <p class="sub">${snap ? `Último análisis: ${new Date(snap.generatedAt).toLocaleString('es-PE')} · lógica v${snap.version}${snap.version !== LOGIC_VERSION ? ` <span class="pill warn">hay lógica nueva v${LOGIC_VERSION}: reprocesa</span>` : ''}` : 'Sin análisis todavía.'}</p>
@@ -95,13 +112,19 @@ export async function renderDatos(view) {
   $('#file').onchange = async e => {
     const f = e.target.files[0];
     if (!f) return;
-    if (/noche|chat\.txt$/i.test(f.name) && !/dia/i.test(f.name)) $('#chat').value = 'noche';
-    if (/dia|mañana|manana/i.test(f.name)) $('#chat').value = 'dia';
-    parsed = parseWhatsApp(await f.text());
-    $('#preview').innerHTML = parsed.length
-      ? `${parsed.length.toLocaleString()} mensajes · del ${parsed[0].ts.slice(0, 16)} al ${parsed[parsed.length - 1].ts.slice(0, 16)}`
-      : '<span class="pill bad">No se reconoció el formato. ¿Es el .txt exportado de WhatsApp?</span>';
-    $('#upload').disabled = !parsed.length;
+    const raw = await f.text();
+    parsed = parseWhatsApp(raw);
+    if (!parsed.length) {
+      $('#preview').innerHTML = '<span class="pill bad">No se reconoció el formato. ¿Es el .txt exportado de WhatsApp?</span>';
+      $('#upload').disabled = true;
+      return;
+    }
+    const det = await detectChat(f.name, raw, parsed);
+    if (det.chat) $('#chat').value = det.chat;
+    $('#preview').innerHTML = `${parsed.length.toLocaleString()} mensajes · del ${parsed[0].ts.slice(0, 16)} al ${parsed[parsed.length - 1].ts.slice(0, 16)}<br>`
+      + (det.chat ? `<span class="pill good">${det.chat === 'dia' ? 'Grupo de día' : 'Grupo de noche'}</span> <span class="small">${esc(det.why)}</span>`
+        : '<span class="pill warn">No pude saber qué chat es: elígelo abajo</span>');
+    $('#upload').disabled = false;
   };
 
   $('#upload').onclick = async e => {

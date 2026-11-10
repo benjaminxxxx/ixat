@@ -42,11 +42,13 @@ if ($method === 'POST') {
         $id = (int) $pdo->lastInsertId();
         $added++;
     }
+    mark_changed();
     json_out(['id' => $id, 'added' => $added]);
 }
 
 if ($method === 'DELETE') {
     $pdo->prepare('DELETE FROM events WHERE id=?')->execute([(int) ($_GET['id'] ?? 0)]);
+    mark_changed();
     json_out(['ok' => true]);
 }
 

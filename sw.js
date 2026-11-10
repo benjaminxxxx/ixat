@@ -1,5 +1,5 @@
 // Service worker: abre la app sin señal, guarda el último análisis y muestra los avisos.
-const VERSION = 'v11';
+const VERSION = 'v13';
 const SHELL = `shell-${VERSION}`;
 const RUNTIME = 'runtime';
 const FILES = [

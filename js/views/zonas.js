@@ -110,7 +110,8 @@ export async function renderZonas(view) {
     }
   };
 
-  const markDirty = () => ($('#reproc').hidden = false);
+  let dirty = false;
+  const markDirty = () => { dirty = true; $('#reproc').hidden = false; };
 
   const save = async z => {
     const body = { ...z };
@@ -317,7 +318,7 @@ export async function renderZonas(view) {
   $('#newPlace').onclick = () => startNew('lugar');
   $('#reprocBtn').onclick = async e => {
     e.target.disabled = true;
-    try { await runProcess(msg => (e.target.textContent = msg)); $('#reproc').hidden = true; toast('Análisis actualizado'); }
+    try { await runProcess(msg => (e.target.textContent = msg)); $('#reproc').hidden = true; dirty = false; toast('Análisis actualizado'); }
     catch (err) { toast(err.message, 5000); }
     e.target.disabled = false; e.target.textContent = 'Reprocesar';
   };
@@ -456,5 +457,6 @@ export async function renderZonas(view) {
   if (shapes.getLayers().length) map.fitBounds(shapes.getBounds(), { maxZoom: 16 });
   setTimeout(() => map.invalidateSize(), 50);
 
-  return () => { stopTools(); map.remove(); };
+  // Al salir de Zonas con cambios sin recalcular, el análisis se actualiza solo.
+  return () => { stopTools(); map.remove(); if (dirty) import('../app.js').then(m => m.reprocess()); };
 }

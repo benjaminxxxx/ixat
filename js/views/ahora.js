@@ -120,6 +120,7 @@ export async function renderAhora(view) {
         <div style="margin-top:10px" id="demChart">${hourBars(snap.heatmap[n.wd].map((v, h) => v ?? snap.hourly[h].callsPerDay), { unit: `pedidos (${dayName})`, nowH: n.h, fmt: v => v.toFixed(1) })}</div>
       </section>
 
+      ${dataUntilCard(snap, n)}
       ${evSoon.length ? `<section class="card">
         <div class="card-head"><h2>Próximos eventos</h2><a class="small" href="#/eventos">Ver todos</a></div>
         <div class="list">${evSoon.slice(0, 4).map(x => eventItem(x, zones, lift)).join('')}</div>
@@ -135,6 +136,17 @@ export async function renderAhora(view) {
   await draw();
   const timer = setInterval(() => { draw(); drawWait && drawWait(); }, 30000);
   return () => clearInterval(timer);
+}
+
+// Hasta cuándo hay datos de cada chat (lo de después todavía no se subió).
+function dataUntilCard(snap, n) {
+  const du = snap.dataUntil || {};
+  const rows = Object.entries(du).sort();
+  if (!rows.length) return '';
+  const age = ts => Math.floor((Date.parse(n.date) - Date.parse(ts.slice(0, 10))) / 864e5);
+  const old = rows.some(([, ts]) => age(ts) >= 4);
+  return `<section class="card small sub">Datos hasta: ${rows.map(([c, ts]) => `<b>${c === 'dia' ? 'día' : esc(c)}</b> ${shortDate(ts.slice(0, 10))} ${ts.slice(11, 16)}`).join(' · ')}
+    ${old ? '<br><span class="pill warn">Hace varios días que no subes chats</span> Las sugerencias siguen valiendo, pero se actualizan al subir los chats nuevos en <a href="#/datos">Datos</a>.' : ''}</section>`;
 }
 
 export function eventItem({ ev, date }, zones, lift) {

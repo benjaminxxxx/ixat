@@ -44,7 +44,8 @@ export function parseWhatsApp(raw) {
     // o vienen con " - " delante en el formato iPhone.
     const isSystem = sep < 0 || (dash && line.startsWith('['));
     if (isSystem) { last = null; continue; }
-    const ts = `${year}-${pad(month)}-${pad(day)} ${pad(hour)}:${pad(mi)}:${pad(s || 0)}`;
+    // Sin segundos: unas exportaciones los traen y otras no; así el mismo mensaje no se duplica.
+    const ts = `${year}-${pad(month)}-${pad(day)} ${pad(hour)}:${pad(mi)}:00`;
     last = { ts, sender: rest.slice(0, sep).trim(), text: rest.slice(sep + 2) };
     out.push(last);
   }

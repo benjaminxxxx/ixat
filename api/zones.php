@@ -27,11 +27,13 @@ if ($method === 'POST') {
             ->execute([$name, $kind, $aliases, $polygon, $lat, $lng, $color]);
         $id = (int) $pdo->lastInsertId();
     }
+    mark_changed();
     json_out(['id' => $id]);
 }
 
 if ($method === 'DELETE') {
     $pdo->prepare('DELETE FROM zones WHERE id=?')->execute([(int) ($_GET['id'] ?? 0)]);
+    mark_changed();
     json_out(['ok' => true]);
 }
 

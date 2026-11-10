@@ -14,6 +14,8 @@ App web instalable (PWA) que lee los chats de WhatsApp del grupo de taxis, saca 
 ```
 
 - **Los mensajes crudos son la fuente de verdad.** Todo lo demás (servicios, clientes, hábitos, avisos) se recalcula desde cero con `js/processor.js`.
+- **Cambios en zonas, lugares, eventos o chats** hacen que la app avise “Recalcular ahora” en todas las pantallas (y al salir de Zonas se recalcula sola).
+- La hora de los mensajes se guarda sin segundos: así un chat exportado de distinto celular no se duplica.
 - **Si cambias la lógica**, sube `LOGIC_VERSION` en `js/processor.js` y toca **Procesar todo** en la pestaña Datos.
 - Subir el mismo chat varias veces no duplica nada: cada mensaje se reconoce por chat + fecha + remitente + texto.
 

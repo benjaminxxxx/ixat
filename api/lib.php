@@ -100,6 +100,15 @@ function ensure_schema(PDO $pdo): void
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 }
 
+// Anota que cambiaron zonas, eventos o mensajes: la app ve que el análisis quedó viejo y lo recalcula.
+function mark_changed(): void
+{
+    if (!is_dir(DATA_DIR)) {
+        mkdir(DATA_DIR, 0755, true);
+    }
+    @touch(DATA_DIR . '/changed.txt');
+}
+
 function json_out($data, int $code = 200): void
 {
     http_response_code($code);

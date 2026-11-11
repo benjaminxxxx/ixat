@@ -3,6 +3,7 @@ import { $, $$, esc, limaNow, hourLabel, pct, num, soles, cap, WD_LONG, bindTips
 import { zoneIndex, zoneLabel, goLink, noData, hourBars, placePoint } from './common.js';
 import { loadLibs } from './zonas.js';
 import { waitTable } from './wait.js';
+import { makeSimulator } from '../simview.js';
 
 const METRICS = {
   soles: { label: 'S/ por taxista', unit: 'soles por taxista por hora', get: x => x.solesPerDriver, fmt: v => 'S/ ' + v.toFixed(1) },
@@ -56,6 +57,19 @@ export async function renderAnalisis(view) {
       <h2>Dónde esperar</h2>
       ${waitTable(snap, zones)}
     </section>
+
+    ${snap.sim?.model ? `<section class="card">
+      <h2>🧪 Simulador</h2>
+      <p class="sub">Toca cualquier punto del mapa: con todos los pedidos pasados y los taxis que estaban libres en cada uno, calcula cuánto habrías esperado ahí y qué pedidos te habría dado la central. Aprende las cercanías del propio chat (quién le gana a quién), no solo la distancia.</p>
+      <div id="smap" style="height:45vh;border-radius:12px"></div>
+      <div id="simOut" class="sub" style="margin-top:8px">Toca un punto del mapa.</div>
+      <div class="hr"></div>
+      <h3>Cercanías</h3>
+      <label class="field">Si piden desde…
+        <select id="nearSel"><option value="">elige un lugar o zona</option>${Object.keys(snap.sim.nearFor).map(Number).filter(id => zones.get(id)).sort((a, b) => zones.get(a).name.localeCompare(zones.get(b).name)).map(id => `<option value="${id}">${esc(zones.get(id).name)}</option>`).join('')}</select></label>
+      <div id="nearOut" class="list" style="margin-top:6px"></div>
+      <p class="small muted">Acierta desde qué punto sale el taxi ganador ~43% de las veces (el más cercano en el mapa: ~40%; al azar: ~28%). Hay ruido: algunos taxistas dicen “libre” en un punto distinto al real. Mientras más zonas y lugares tengas bien marcados, mejor aprende. Se recalcula solo al actualizar el análisis.</p>
+    </section>` : ''}
 
     <section class="card">
       <div class="card-head"><h2>Dónde hay pedidos</h2><a class="btn sm" href="#/eventos">🎉 Eventos</a></div>
@@ -157,7 +171,43 @@ export async function renderAnalisis(view) {
     if (all.length) map.fitBounds(all, { maxZoom: 15, padding: [20, 20] });
     drawMap();
   }).catch(err => ($('#mapNote').textContent = err.message));
-  return () => { if (map) map.off(), map.remove(); };
+  // ---- simulador ----
+  let smap = null;
+  if (snap.sim?.model) {
+    const simr = makeSimulator(snap.sim, zones);
+    const fmtMin = v => (v == null ? '—' : '~' + Math.round(v));
+    const bandsInfo = snap.waitInfo.bands;
+    const best = snap.waitSpots.filter(w => !w.est).slice(0, 8);
+    const showAt = (ll, marker) => {
+      const r = simr.at(ll);
+      const nm = r.id != null ? esc(zones.get(r.id).name) : `${ll[0].toFixed(5)}, ${ll[1].toFixed(5)}`;
+      $('#simOut').innerHTML = `<b>Esperando en ${nm}</b>
+        <table style="margin-top:6px"><tr>${bandsInfo.map(([a, b]) => `<th>${a}–${b}h</th>`).join('')}</tr>
+        <tr>${r.minutes.map(v => `<td>${fmtMin(v)} min</td>`).join('')}</tr></table>
+        <p class="small">Te tocarían sobre todo pedidos de: ${r.top.map(([A, f]) => `<b>${esc(zones.get(A)?.name || '?')}</b> ${Math.round(f * 100)}%`).join(', ')}</p>
+        <p class="small muted">Simulado: solo cuenta pedidos de la central (ajustado a la escala real). Compáralo con “Dónde esperar”, que mezcla lo real.</p>`;
+      marker.setLatLng(ll).addTo(smap);
+    };
+    loadLibs().then(() => {
+      if (!document.body.contains($('#smap'))) return;
+      smap = L.map('smap', { maxZoom: 19 }).setView([-15.8565, -74.247], 14);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(smap);
+      const css2 = getComputedStyle(document.documentElement);
+      for (const w of best) {
+        const p = placePoint(zones.get(w.zone));
+        if (p) L.circleMarker(p, { radius: 7, color: css2.getPropertyValue('--surface').trim() || '#fff', weight: 2, fillColor: css2.getPropertyValue('--series').trim() || '#2a78d6', fillOpacity: 0.8 })
+          .bindTooltip(esc(zones.get(w.zone).name)).on('click', () => showAt(p, marker)).addTo(smap);
+      }
+      const marker = L.marker([-15.8565, -74.247]);
+      smap.on('click', e => showAt([e.latlng.lat, e.latlng.lng], marker));
+    }).catch(() => {});
+    $('#nearSel').onchange = e => {
+      const A = +e.target.value;
+      $('#nearOut').innerHTML = !A ? '' : (snap.sim.nearFor[A] || []).map((L, i) => `<div class="item"><div class="grow"><b>${i + 1}. ${esc(zones.get(L)?.name || '?')}</b></div>${goLink(zones, L)}</div>`).join('');
+    };
+  }
+
+  return () => { if (map) map.off(), map.remove(); if (smap) smap.off(), smap.remove(); };
 }
 
 function hoursOf(sh) {

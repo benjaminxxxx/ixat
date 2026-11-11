@@ -21,7 +21,9 @@ export async function runProcess(onStep = () => {}) {
     w.postMessage({ messages, zones, events });
   });
   onStep('Guardando análisis…');
-  await api('snapshot.php', { method: 'POST', body: snap });
+  // Reintento: tras procesar varios segundos, el servidor pudo cerrar la conexión inactiva. Guardar de nuevo es seguro.
+  try { await api('snapshot.php', { method: 'POST', body: snap }); }
+  catch (e) { if (e.status) throw e; await api('snapshot.php', { method: 'POST', body: snap }); }
   state.snap = snap;
   return snap;
 }

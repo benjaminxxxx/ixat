@@ -3,8 +3,9 @@
 // Si cambias la lógica, sube LOGIC_VERSION y vuelve a "Procesar todo".
 
 import { occurrences, slots } from './events.js';
+import { simulate, blendWait } from './sim.js';
 
-export const LOGIC_VERSION = 7;
+export const LOGIC_VERSION = 9;
 
 export const CONFIG = {
   dispatchers: ['Transporte Los 5 De Oro', '+51 965 134 127'],
@@ -233,7 +234,8 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
     if (LIBRE_HEAD.test(m.n) || (LIBRE_ANY.test(m.n) && m.n.split(' ').length <= 4)) {
       if (/ocupad/.test(m.n)) continue;
       const place = m.n.split(' ').filter(w => !LIBRE_DROP.has(w)).join(' ');
-      libres.push({ chat: m.chat, sender: m.sender, t: m.t, date: m.date, h: m.h, wd: m.wd, place, zone: locate(place).zone });
+      const loc = locate(place);
+      libres.push({ chat: m.chat, sender: m.sender, t: m.t, date: m.date, h: m.h, wd: m.wd, place, zone: loc.zone, spot: loc.spot });
     }
   }
 
@@ -322,14 +324,15 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
       if (ep && (l.chat !== ep.chat || l.t - ep.tLast > cfg.libreGapMin
         || svc.some(s => s.chat === ep.chat && s.confirmT > ep.t0 && s.confirmT < l.t)
         || ocup.some(o => o.chat === ep.chat && o.t > ep.tLast && o.t < l.t))) close();
-      if (!ep) ep = { sender, driver: name, chat: l.chat, t0: l.t, tLast: l.t, h: l.h, zones: [], places: [] };
+      if (!ep) ep = { sender, driver: name, chat: l.chat, t0: l.t, tLast: l.t, h: l.h, zones: [], places: [], spots: [] };
       ep.tLast = l.t;
       if (l.zone >= 0) ep.zones.push(l.zone);
+      if (l.spot >= 0) ep.spots.push(l.spot);
       if (l.place) ep.places.push(l.place);
     }
     close();
   }
-  for (const e of episodes) { e.zone = e.zones.length ? mode(e.zones) : -1; e.place = e.places.length ? mode(e.places) : ''; delete e.zones; delete e.places; }
+  for (const e of episodes) { e.zone = e.zones.length ? mode(e.zones) : -1; e.spot = e.spots.length ? mode(e.spots) : -1; e.place = e.places.length ? mode(e.places) : ''; delete e.zones; delete e.places; delete e.spots; }
 
   // ---------- estadísticas por hora ----------
   const hourly = Array.from({ length: 24 }, (_, h) => ({ h, calls: 0, services: 0, driverSlots: 0, cov: coveredDays[h] }));
@@ -472,18 +475,23 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
   const zw = new Map();
   for (const e of episodes) {
     if (!e.driver || e.zone < 0) continue;
+    const at = e.spot >= 0 ? e.spot : e.zone; // el punto exacto que dijo ("libre agencia llamosas")
     const b = bandOf(e.h), t = epHours(e), w = e.won ? 1 : 0;
     gW[b] += w; gT[b] += t;
-    if (!zw.has(e.zone)) zw.set(e.zone, { n: 0, w: 0, t: 0, paso: 0, bw: Array(5).fill(0), bt: Array(5).fill(0), bn: Array(5).fill(0) });
-    const o = zw.get(e.zone);
+    if (!zw.has(at)) zw.set(at, { n: 0, w: 0, t: 0, paso: 0, bw: Array(5).fill(0), bt: Array(5).fill(0), bn: Array(5).fill(0) });
+    const o = zw.get(at);
     o.n++; o.w += w; if (e.paso) o.paso++; o.t += t; o.bw[b] += w; o.bt[b] += t; o.bn[b]++;
   }
   const gRate = gW.reduce((a, x) => a + x, 0) / (gT.reduce((a, x) => a + x, 0) || 1);
-  const waitSpots = [...zw.entries()].filter(([, o]) => o.n >= 100).map(([zone, o]) => {
-    // Solo zonas con 100+ esperas (con menos, sale ruido); se acerca al promedio con 10 horas de peso.
+  const realSpots = [...zw.entries()].filter(([, o]) => o.n >= 10).map(([zone, o]) => {
+    // Con pocas esperas se acerca al promedio (10 horas de peso); el simulador completa lo que falta.
     const rate = (o.w + 10 * gRate) / (o.t + 10);
     return { zone, n: o.n, paso: o.w ? +(o.paso / o.w).toFixed(2) : 0, rate: +rate.toFixed(2), bands: BANDS.map((_, b) => +((o.bw[b] + 3 * rate) / (o.bt[b] + 3)).toFixed(2)), bandN: o.bn };
   }).sort((a, b) => b.rate - a.rate || a.zone - b.zone);
+  // Simulador: mi taxi libre en cada punto del mapa, frente a los taxistas que estaban libres en cada pedido.
+  const sim = simulate({ calls: allCalls, libres, ocupados, senderName, zones, covered, bands: BANDS });
+  // Ranking final: lo real donde hay muchas esperas, el simulador donde hay pocas o ninguna.
+  const waitSpots = blendWait({ real: realSpots, sim, nB: BANDS.length, global: BANDS.map((_, b) => gW[b] / (gT[b] || 1)) });
   const waitInfo = { bands: BANDS, global: BANDS.map((_, b) => +(gW[b] / (gT[b] || 1)).toFixed(2)), rate: +gRate.toFixed(2) };
 
   // Lugares que no caen en ninguna zona (para que los asignes).
@@ -689,7 +697,7 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
   for (const m of msgs) { const s = chatSummary[m.chat] ||= { messages: 0, first: m.date, last: m.date, lastTs: m.ts }; s.messages++; if (m.date > s.last) s.last = m.date; if (m.date < s.first) s.first = m.date; if (m.ts > s.lastTs) s.lastTs = m.ts; }
 
   // Para pruebas de acierto (backtest): datos internos sin compactar.
-  if (extra.debug) extra.debug.out = { allCalls, episodes, libres, covered, senderName };
+  if (extra.debug) extra.debug.out = { allCalls, episodes, libres, covered, senderName, sim };
 
   return {
     version: LOGIC_VERSION,
@@ -704,7 +712,7 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
       mappedSenders: senderName.size, zonedCalls: allCalls.filter(c => c.zone >= 0).length,
     },
     zones: zones.map(z => ({ id: z.id, name: z.name, aliases: z.aliases || [], kind: z.kind || 'zona', color: z.color, polygon: z.polygon, lat: z.lat ?? null, lng: z.lng ?? null, parent: spotParent.get(z.id) ?? -1, calls: zoneCounts[z.id] || 0, direct: directCounts[z.id] || 0 })),
-    hourly, heatmap, heatCov, shifts, nap, drivers, parking, parkingWd, spotHeat, waitSpots, waitInfo, unmatchedPlaces, patterns, alerts, me: meStats,
+    hourly, heatmap, heatCov, shifts, nap, drivers, parking, parkingWd, spotHeat, waitSpots, waitInfo, sim: { bands: sim.bands, samples: sim.samples, beta: sim.beta, nearFor: sim.nearFor, model: sim.model }, unmatchedPlaces, patterns, alerts, me: meStats,
     events, eventStats,
     clients: clients.slice(0, 1500),
     dict: { phones, places, drivers: driverNames, chats },

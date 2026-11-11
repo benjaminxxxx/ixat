@@ -27,7 +27,7 @@ export function renderWaitCard(el, snap, zones) {
   const spots = snap.waitSpots.filter(s => placePoint(zones.get(s.zone)));
   const byZone = new Map(snap.waitSpots.map(s => [s.zone, s]));
   // Zonas para elegir "estoy en": las que tienen dibujo o punto.
-  const choices = [...zones.values()].filter(z => z.kind !== 'lugar' && placePoint(z)).sort((a, b) => a.name.localeCompare(b.name));
+  const choices = [...zones.values()].filter(z => placePoint(z)).sort((a, b) => a.name.localeCompare(b.name));
   let here = getSaved();
   let geoPoint = null; // si se usó el GPS, la distancia se mide desde ahí
 
@@ -62,7 +62,7 @@ export function renderWaitCard(el, snap, zones) {
       ${verdict}
       <table style="margin-top:8px">
         <tr><th style="text-align:left">Zona</th><th>Espera</th>${herePt ? '<th>Viaje</th><th>GLP</th>' : ''}<th></th></tr>
-        ${opts.slice(0, 6).map(o => `<tr${o.s.zone === here ? ' class="me"' : ''}><td style="text-align:left">${esc(zones.get(o.s.zone).name)}</td><td>~${Math.round(o.wait)} min</td>${herePt ? `<td>${o.d < 0.05 ? 'aquí' : o.d.toFixed(1) + ' km'}</td><td>${o.d < 0.05 ? '—' : 'S/ ' + o.cost.toFixed(2)}</td>` : ''}<td>${goLink(zones, o.s.zone)}</td></tr>`).join('')}
+        ${opts.slice(0, 6).map(o => `<tr${o.s.zone === here ? ' class="me"' : ''}><td style="text-align:left">${esc(zones.get(o.s.zone).name)}${o.s.est ? ' <span class="muted small">(simulado)</span>' : ''}</td><td>~${Math.round(o.wait)} min</td>${herePt ? `<td>${o.d < 0.05 ? 'aquí' : o.d.toFixed(1) + ' km'}</td><td>${o.d < 0.05 ? '—' : 'S/ ' + o.cost.toFixed(2)}</td>` : ''}<td>${goLink(zones, o.s.zone)}</td></tr>`).join('')}
       </table>
       <p class="small muted">Espera: minutos promedio hasta conseguir servicio esperando ahí a esta hora, medido con ${snap.waitSpots.reduce((a, s) => a + s.n, 0).toLocaleString()} reportes “libre” del chat. Probado con días pasados: esperar en las 3 mejores dio 28% más servicios por hora que el resto (y que Llamosas).</p>`;
 
@@ -89,11 +89,11 @@ export function renderWaitCard(el, snap, zones) {
 export function waitTable(snap, zones) {
   if (!snap.waitSpots?.length) return '<p class="sub">Aún no hay datos suficientes.</p>';
   const info = snap.waitInfo;
-  const cell = (s, b) => s.bandN[b] >= 20 ? `~${Math.round(60 / s.bands[b])}` : '<span class="muted">·</span>';
+  const cell = (s, b) => `~${Math.round(60 / s.bands[b])}`;
   return `<div class="scroll-x"><table>
     <tr><th style="text-align:left">Zona</th>${info.bands.map(([a, b]) => `<th>${a}–${b}h</th>`).join('')}<th>Esperas</th></tr>
-    ${snap.waitSpots.map(s => `<tr><td style="text-align:left">${esc(zones.get(s.zone)?.name || '?')}</td>${info.bands.map((_, b) => `<td>${cell(s, b)}</td>`).join('')}<td class="muted">${s.n}</td></tr>`).join('')}
+    ${snap.waitSpots.slice(0, 30).map(s => `<tr><td style="text-align:left">${esc(zones.get(s.zone)?.name || '?')}${s.est ? ' <span class="muted small">(simulado)</span>' : ''}</td>${info.bands.map((_, b) => `<td>${cell(s, b)}</td>`).join('')}<td class="muted">${s.n}</td></tr>`).join('')}
     <tr><td style="text-align:left"><b>Promedio Chala</b></td>${info.global.map(r => `<td><b>~${Math.round(60 / r)}</b></td>`).join('')}<td></td></tr>
   </table></div>
-  <p class="small muted">Minutos promedio hasta conseguir servicio esperando en cada zona (menos es mejor). “·” = menos de 20 esperas registradas en esa franja.</p>`;
+  <p class="small muted">Minutos promedio hasta conseguir servicio esperando ahí (menos es mejor): los 30 mejores puntos. Mezcla las esperas reales del chat con el simulador; “(simulado)” = casi nadie espera ahí todavía, es una estimación.</p>`;
 }

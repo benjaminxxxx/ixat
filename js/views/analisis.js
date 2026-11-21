@@ -2,7 +2,7 @@ import { loadSnapshot } from '../app.js';
 import { $, $$, esc, limaNow, hourLabel, pct, num, soles, cap, WD_LONG, bindTips, wdPlural } from '../util.js';
 import { zoneIndex, zoneLabel, goLink, noData, hourBars, placePoint } from './common.js';
 import { loadLibs } from './zonas.js';
-import { waitTable } from './wait.js';
+import { waitTable, withAlturas } from './wait.js';
 import { makeSimulator } from '../simview.js';
 
 const METRICS = {
@@ -177,7 +177,8 @@ export async function renderAnalisis(view) {
     const simr = makeSimulator(snap.sim, zones);
     const fmtMin = v => (v == null ? '—' : '~' + Math.round(v));
     const bandsInfo = snap.waitInfo.bands;
-    const best = snap.waitSpots.filter(w => !w.est).slice(0, 8);
+    const wz = withAlturas(snap, zones);
+    const best = snap.waitSpots.filter(w => !w.est && !w.hide).slice(0, 8);
     const showAt = (ll, marker) => {
       const r = simr.at(ll);
       const nm = r.id != null ? esc(zones.get(r.id).name) : `${ll[0].toFixed(5)}, ${ll[1].toFixed(5)}`;
@@ -194,16 +195,16 @@ export async function renderAnalisis(view) {
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(smap);
       const css2 = getComputedStyle(document.documentElement);
       for (const w of best) {
-        const p = placePoint(zones.get(w.zone));
+        const p = placePoint(wz.get(w.zone));
         if (p) L.circleMarker(p, { radius: 7, color: css2.getPropertyValue('--surface').trim() || '#fff', weight: 2, fillColor: css2.getPropertyValue('--series').trim() || '#2a78d6', fillOpacity: 0.8 })
-          .bindTooltip(esc(zones.get(w.zone).name)).on('click', () => showAt(p, marker)).addTo(smap);
+          .bindTooltip(esc(wz.get(w.zone).name)).on('click', () => showAt(p, marker)).addTo(smap);
       }
       const marker = L.marker([-15.8565, -74.247]);
       smap.on('click', e => showAt([e.latlng.lat, e.latlng.lng], marker));
     }).catch(() => {});
     $('#nearSel').onchange = e => {
       const A = +e.target.value;
-      $('#nearOut').innerHTML = !A ? '' : (snap.sim.nearFor[A] || []).map((L, i) => `<div class="item"><div class="grow"><b>${i + 1}. ${esc(zones.get(L)?.name || '?')}</b></div>${goLink(zones, L)}</div>`).join('');
+      $('#nearOut').innerHTML = !A ? '' : (snap.sim.nearFor[A] || []).map((L, i) => `<div class="item"><div class="grow"><b>${i + 1}. ${esc(wz.get(L)?.name || '?')}</b></div>${goLink(wz, L)}</div>`).join('');
     };
   }
 

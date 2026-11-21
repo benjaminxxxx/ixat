@@ -36,7 +36,7 @@ const uniq = a => [...new Set(a)];
 // calls: pedidos (con zone, spot, driver, confirmT, cancelled, t, h, chat, date)
 // libres: reportes "libre" (sender, chat, t, zone, spot); ocupados: {sender, chat, t}
 // senderName: remitente → nombre de taxista; covered: Set('fecha|hora')
-export function simulate({ calls, libres, ocupados, senderName, zones, covered, bands }) {
+export function simulate({ calls, libres, ocupados, senderName, zones, covered, bands, hidden = new Set() }) {
   const pt = new Map();
   for (const z of zones) { const p = pointOf(z); if (p) pt.set(z.id, p); }
   const locOf = x => (x.spot >= 0 ? x.spot : x.zone);
@@ -146,7 +146,7 @@ export function simulate({ calls, libres, ocupados, senderName, zones, covered, 
   const nearFor = {};
   for (const [A, n] of pickN) {
     if (n < 10) continue;
-    nearFor[A] = cands.map(L => [L, score(A, L)]).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([L]) => L);
+    nearFor[A] = cands.filter(L => !hidden.has(L)).map(L => [L, score(A, L)]).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([L]) => L);
   }
   // Modelo compacto para simular en el celular cualquier punto que toques en el mapa.
   const r3 = v => Math.round(v * 1000) / 1000;
@@ -165,9 +165,21 @@ export function simulate({ calls, libres, ocupados, senderName, zones, covered, 
 
 // Combina lo real (esperas "libre" del chat, incluye clientes al paso) con lo simulado
 // (solo ve pedidos de la central, por eso se ajusta a la escala real con los puntos de muchos datos).
-export function blendWait({ real, sim, nB, global, W = 60, W0 = 120 }) {
+// Zonas con no_wait: no se recomiendan, y sus puntos sin datos parten del movimiento de la zona
+// en vez del promedio de Chala. Cada altura suma las esperas reales de los negocios que representa.
+export function blendWait({ real, sim, nB, global, zones = [], parentOf = new Map(), alturas = [], hidden = new Set(), W = 60, W0 = 120 }) {
+  const noWait = new Set(zones.filter(z => +z.no_wait).map(z => z.id));
   const simBy = new Map(sim.spots.map(s => [s.loc, s]));
   const realBy = new Map(real.map(r => [r.zone, r]));
+  const parents = new Map([...parentOf, ...alturas.map(a => [a.id, a.parent])]);
+  for (const a of alturas) {
+    const rs = [...new Set([...a.members, a.ref])].map(id => realBy.get(id)).filter(Boolean);
+    if (!rs.length) continue;
+    const n = rs.reduce((t, r) => t + r.n, 0);
+    const bandN = Array.from({ length: nB }, (_, b) => rs.reduce((t, r) => t + r.bandN[b], 0));
+    const bands = bandN.map((bn, b) => rs.reduce((t, r) => t + r.bands[b] * (bn ? r.bandN[b] / bn : r.n / n), 0));
+    realBy.set(a.id, { zone: a.id, n, bandN, bands, paso: rs.reduce((t, r) => t + r.paso * r.n, 0) / n });
+  }
   const k = Array.from({ length: nB }, (_, b) => {
     const r = real.filter(x => x.n >= 100 && simBy.get(x.zone)?.perHour[b] > 0)
       .map(x => x.bands[b] / simBy.get(x.zone).perHour[b]).sort((a, c) => a - c);
@@ -175,17 +187,22 @@ export function blendWait({ real, sim, nB, global, W = 60, W0 = 120 }) {
   });
   sim.model.scale = k.map(v => Math.round(v * 1000) / 1000);
   const ids = new Set([...real.filter(r => simBy.has(r.zone) || r.n >= 100).map(r => r.zone), ...sim.spots.map(s => s.loc)]);
-  return [...ids].map(id => {
+  const bandsOf = (id, prior) => {
     const r = realBy.get(id), s = simBy.get(id);
-    const bands = Array.from({ length: nB }, (_, b) => {
+    return Array.from({ length: nB }, (_, b) => {
       const sv = s ? k[b] * s.perHour[b] : null, rn = r ? r.bandN[b] : 0;
       if (sv == null) return r.bands[b];
-      // Sin esperas reales suficientes, lo simulado se acerca al promedio de Chala (W0):
+      // Sin esperas reales suficientes, lo simulado se acerca al promedio de Chala o de su zona (W0):
       // el simulador acierta solo en parte, así que un punto sin probar no puede quedar primero por sí solo.
-      const g = global[b] || sv, w0 = Math.max(0, W0 - 4 * (r ? r.n : 0));
+      const g = prior[b] || sv, w0 = Math.max(0, W0 - 4 * (r ? r.n : 0));
       return ((r ? rn * r.bands[b] : 0) + W * sv + w0 * g) / (rn + W + w0);
-    }).map(v => +v.toFixed(2));
+    });
+  };
+  const wideBands = new Map([...ids].filter(id => noWait.has(id)).map(id => [id, bandsOf(id, global)]));
+  return [...ids].map(id => {
+    const r = realBy.get(id), s = simBy.get(id);
+    const bands = bandsOf(id, wideBands.get(parents.get(id)) || global).map(v => +v.toFixed(2));
     const rate = +(bands.reduce((a, x) => a + x, 0) / nB).toFixed(2);
-    return { zone: id, n: r ? r.n : 0, paso: r ? r.paso : 0, rate, bands, bandN: r ? r.bandN : Array(nB).fill(0), est: !r || r.n < 30, top: s ? s.top : [] };
+    return { zone: id, n: r ? r.n : 0, paso: r ? +r.paso.toFixed(2) : 0, rate, bands, bandN: r ? r.bandN : Array(nB).fill(0), est: !r || r.n < 30, top: s ? s.top : [], ...(hidden.has(id) ? { hide: 1 } : {}) };
   }).filter(x => x.bands.every(v => v > 0)).sort((a, b) => b.rate - a.rate || a.zone - b.zone);
 }

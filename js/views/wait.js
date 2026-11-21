@@ -1,7 +1,7 @@
 // "Dónde esperar": cuánto se tarda en conseguir servicio esperando en cada zona,
 // y si conviene quedarse o moverse (contando el viaje y el combustible).
 import { $, esc, limaNow, getHere, toast } from '../util.js';
-import { placePoint, goLink } from './common.js';
+import { placePoint, goLink, zoneLabel } from './common.js';
 import { makeLocator } from '../processor.js';
 
 const KEY = 'taxi_here_zone';
@@ -20,14 +20,19 @@ function km(a, b) {
 const bandIdx = (info, h) => info.bands.findIndex(([a, b]) => h >= a && h < b);
 // Minutos promedio hasta conseguir servicio esperando en esa zona a esa hora.
 export const waitMinutes = (spot, b) => 60 / spot.bands[b];
+// Zonas y lugares más las alturas calculadas ("3ra por Loza Verde"), que no son lugares guardados.
+export const withAlturas = (snap, zones) => new Map([...zones, ...(snap.alturas || []).map(a => [a.id, a])]);
+// "Cuchara Brava · 3ra Calle": el punto y la zona donde queda. Una altura ya dice su calle.
+const spotName = (zones, id) => (zones.get(id)?.altura ? esc(zones.get(id).name) : zoneLabel(zones, zones.get(id)?.parent ?? -1, '', id));
 
-export function renderWaitCard(el, snap, zones) {
+export function renderWaitCard(el, snap, savedZones) {
   if (!snap.waitSpots || !snap.waitSpots.length) { el.hidden = true; return; }
+  const zones = withAlturas(snap, savedZones);
   const info = snap.waitInfo, fuel = snap.config.fuel || { solesPerKm: 0.283, kmh: 25 };
-  const spots = snap.waitSpots.filter(s => placePoint(zones.get(s.zone)));
+  const spots = snap.waitSpots.filter(s => placePoint(zones.get(s.zone)) && !s.hide);
   const byZone = new Map(snap.waitSpots.map(s => [s.zone, s]));
-  // Zonas para elegir "estoy en": las que tienen dibujo o punto.
-  const choices = [...zones.values()].filter(z => placePoint(z)).sort((a, b) => a.name.localeCompare(b.name));
+  // Zonas para elegir "estoy en": las que tienen dibujo o punto (las alturas no son lugares guardados).
+  const choices = [...savedZones.values()].filter(z => placePoint(z)).sort((a, b) => a.name.localeCompare(b.name));
   let here = getSaved();
   let geoPoint = null; // si se usó el GPS, la distancia se mide desde ahí
 
@@ -43,16 +48,31 @@ export function renderWaitCard(el, snap, zones) {
       const travel = d == null ? 0 : (d / fuel.kmh) * 60;
       return { s, d, travel, wait: waitMinutes(s, b), total: waitMinutes(s, b) + travel, cost: d == null ? null : d * fuel.solesPerKm };
     }).sort((a, b2) => (herePt ? a.total - b2.total : a.wait - b2.wait));
-    const best = opts[0];
+    // Primero los puntos con esperas reales: en días no vistos rindieron más que los solo simulados.
+    const proven = opts.filter(o => !o.s.est);
+    const ranked = proven.length >= 3 ? [...proven, ...opts.filter(o => o.s.est)] : opts;
+    const best = ranked[0];
     let verdict = '';
-    if (here && herePt) {
+    if (here && herePt && best) {
       const name = esc(zones.get(here)?.name || 'aquí');
-      if (best.s.zone === here || best.total >= hereMin - 3) {
+      const hereZ = zones.get(here);
+      if (hereZ?.no_wait || byZone.get(here)?.hide) {
+        // Calle larga: no vale "quédate ahí", hay que decir a qué altura (mejor si es en la misma calle).
+        const street = hereZ.no_wait ? hereZ : zones.get(hereZ.parent) || hereZ;
+        const inside = opts.find(o => zones.get(o.s.zone).parent === street.id);
+        const pick = inside && inside.total <= best.total + 3 ? inside : best;
+        const move = pick.d < 0.05 ? 'Ya estás a esa altura' : `${pick.d.toFixed(1)} km · S/ ${pick.cost.toFixed(2)} de GLP`;
+        const sameStreet = inside && inside !== pick ? ` Si prefieres seguir en esta calle: <b>${spotName(zones, inside.s.zone)}</b> (~${Math.round(inside.total)} min).` : '';
+        verdict = `<div class="item soon"><div class="grow"><b>📍 Ponte en ${spotName(zones, pick.s.zone)}</b><div class="small sub">Decir solo “${esc(street.name)}” no indica a qué altura estás. ${move} · ~${Math.round(pick.total)} min hasta tu servicio.${sameStreet}</div></div>${goLink(zones, pick.s.zone)}</div>`;
+      } else if (best.s.zone === here || best.total >= hereMin - 3) {
         verdict = `<div class="item soon"><div class="grow"><b>✅ Quédate en ${name}</b><div class="small sub">~${Math.round(hereMin)} min para tu próximo servicio${hereSpot ? '' : ' (promedio de Chala a esta hora)'}. Moverte no te ahorra tiempo.</div></div></div>`;
       } else {
-        verdict = `<div class="item soon"><div class="grow"><b>➡️ Ve a ${esc(zones.get(best.s.zone).name)}</b><div class="small sub">${best.d.toFixed(1)} km · S/ ${best.cost.toFixed(2)} de GLP · ~${Math.round(best.total)} min hasta tu servicio contando el viaje, frente a ~${Math.round(hereMin)} min si te quedas en ${name}.</div></div>${goLink(zones, best.s.zone)}</div>`;
+        verdict = `<div class="item soon"><div class="grow"><b>➡️ Ve a ${spotName(zones, best.s.zone)}</b><div class="small sub">${best.d.toFixed(1)} km · S/ ${best.cost.toFixed(2)} de GLP · ~${Math.round(best.total)} min hasta tu servicio contando el viaje, frente a ~${Math.round(hereMin)} min si te quedas en ${name}.</div></div>${goLink(zones, best.s.zone)}</div>`;
       }
     }
+    // La mejor altura de cada calle larga, aunque no entre entre los primeros de Chala.
+    const streetBest = [...new Set((snap.alturas || []).map(a => a.parent))]
+      .map(id => opts.find(o => zones.get(o.s.zone).altura && zones.get(o.s.zone).parent === id)).filter(Boolean);
     el.innerHTML = `
       <div class="card-head"><h2>Dónde esperar</h2><span class="sub">${from}:00–${to}:00</span></div>
       <div class="row" style="margin-bottom:8px">
@@ -62,8 +82,9 @@ export function renderWaitCard(el, snap, zones) {
       ${verdict}
       <table style="margin-top:8px">
         <tr><th style="text-align:left">Zona</th><th>Espera</th>${herePt ? '<th>Viaje</th><th>GLP</th>' : ''}<th></th></tr>
-        ${opts.slice(0, 6).map(o => `<tr${o.s.zone === here ? ' class="me"' : ''}><td style="text-align:left">${esc(zones.get(o.s.zone).name)}${o.s.est ? ' <span class="muted small">(simulado)</span>' : ''}</td><td>~${Math.round(o.wait)} min</td>${herePt ? `<td>${o.d < 0.05 ? 'aquí' : o.d.toFixed(1) + ' km'}</td><td>${o.d < 0.05 ? '—' : 'S/ ' + o.cost.toFixed(2)}</td>` : ''}<td>${goLink(zones, o.s.zone)}</td></tr>`).join('')}
+        ${ranked.slice(0, 6).map(o => `<tr${o.s.zone === here ? ' class="me"' : ''}><td style="text-align:left">${spotName(zones, o.s.zone)}${o.s.est ? ' <span class="muted small">(simulado)</span>' : ''}</td><td>~${Math.round(o.wait)} min</td>${herePt ? `<td>${o.d < 0.05 ? 'aquí' : o.d.toFixed(1) + ' km'}</td><td>${o.d < 0.05 ? '—' : 'S/ ' + o.cost.toFixed(2)}</td>` : ''}<td>${goLink(zones, o.s.zone)}</td></tr>`).join('')}
       </table>
+      ${streetBest.length ? `<h3 style="margin-top:10px">Mejor altura por calle</h3><div class="list" id="streetBest">${streetBest.map(o => `<div class="item"><div class="grow"><b>${spotName(zones, o.s.zone)}</b><div class="small sub">~${Math.round(o.wait)} min de espera${o.d != null ? ` · ${o.d < 0.05 ? 'aquí' : o.d.toFixed(1) + ' km'}` : ''}</div></div>${goLink(zones, o.s.zone)}</div>`).join('')}</div>` : ''}
       <p class="small muted">Espera: minutos promedio hasta conseguir servicio esperando ahí a esta hora, medido con ${snap.waitSpots.reduce((a, s) => a + s.n, 0).toLocaleString()} reportes “libre” del chat. Probado con días pasados: esperar en las 3 mejores dio 28% más servicios por hora que el resto (y que Llamosas).</p>`;
 
     $('#hereSel', el).onchange = e => { here = +e.target.value || null; geoPoint = null; setSaved(here || ''); draw(); };
@@ -86,13 +107,14 @@ export function renderWaitCard(el, snap, zones) {
 }
 
 // Tabla para Análisis: minutos hasta conseguir servicio por zona y franja.
-export function waitTable(snap, zones) {
+export function waitTable(snap, savedZones) {
   if (!snap.waitSpots?.length) return '<p class="sub">Aún no hay datos suficientes.</p>';
+  const zones = withAlturas(snap, savedZones);
   const info = snap.waitInfo;
   const cell = (s, b) => `~${Math.round(60 / s.bands[b])}`;
   return `<div class="scroll-x"><table>
     <tr><th style="text-align:left">Zona</th>${info.bands.map(([a, b]) => `<th>${a}–${b}h</th>`).join('')}<th>Esperas</th></tr>
-    ${snap.waitSpots.slice(0, 30).map(s => `<tr><td style="text-align:left">${esc(zones.get(s.zone)?.name || '?')}${s.est ? ' <span class="muted small">(simulado)</span>' : ''}</td>${info.bands.map((_, b) => `<td>${cell(s, b)}</td>`).join('')}<td class="muted">${s.n}</td></tr>`).join('')}
+    ${snap.waitSpots.filter(s => !s.hide).sort((a, b) => !!a.est - !!b.est).slice(0, 30).map(s => `<tr><td style="text-align:left">${zones.get(s.zone) ? spotName(zones, s.zone) : '?'}${s.est ? ' <span class="muted small">(simulado)</span>' : ''}</td>${info.bands.map((_, b) => `<td>${cell(s, b)}</td>`).join('')}<td class="muted">${s.n}</td></tr>`).join('')}
     <tr><td style="text-align:left"><b>Promedio Chala</b></td>${info.global.map(r => `<td><b>~${Math.round(60 / r)}</b></td>`).join('')}<td></td></tr>
   </table></div>
   <p class="small muted">Minutos promedio hasta conseguir servicio esperando ahí (menos es mejor): los 30 mejores puntos. Mezcla las esperas reales del chat con el simulador; “(simulado)” = casi nadie espera ahí todavía, es una estimación.</p>`;

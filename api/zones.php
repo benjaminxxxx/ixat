@@ -18,13 +18,15 @@ if ($method === 'POST') {
     $lat = isset($z['lat']) && is_numeric($z['lat']) && abs((float) $z['lat']) <= 90 ? (float) $z['lat'] : null;
     $lng = isset($z['lng']) && is_numeric($z['lng']) && abs((float) $z['lng']) <= 180 ? (float) $z['lng'] : null;
     $color = preg_match('/^#[0-9a-f]{6}$/i', (string) ($z['color'] ?? '')) ? $z['color'] : '#e0a800';
+    // Si no viene el dato, se conserva el que tenía.
+    $noWait = array_key_exists('no_wait', $z) ? (empty($z['no_wait']) ? 0 : 1) : null;
     if (!empty($z['id'])) {
-        $pdo->prepare('UPDATE zones SET name=?, kind=?, aliases=?, polygon=?, lat=?, lng=?, color=? WHERE id=?')
-            ->execute([$name, $kind, $aliases, $polygon, $lat, $lng, $color, (int) $z['id']]);
+        $pdo->prepare('UPDATE zones SET name=?, kind=?, aliases=?, polygon=?, lat=?, lng=?, color=?, no_wait=COALESCE(?, no_wait) WHERE id=?')
+            ->execute([$name, $kind, $aliases, $polygon, $lat, $lng, $color, $noWait, (int) $z['id']]);
         $id = (int) $z['id'];
     } else {
-        $pdo->prepare('INSERT INTO zones (name, kind, aliases, polygon, lat, lng, color) VALUES (?,?,?,?,?,?,?)')
-            ->execute([$name, $kind, $aliases, $polygon, $lat, $lng, $color]);
+        $pdo->prepare('INSERT INTO zones (name, kind, aliases, polygon, lat, lng, color, no_wait) VALUES (?,?,?,?,?,?,?,?)')
+            ->execute([$name, $kind, $aliases, $polygon, $lat, $lng, $color, $noWait ?? 0]);
         $id = (int) $pdo->lastInsertId();
     }
     mark_changed();
@@ -37,9 +39,10 @@ if ($method === 'DELETE') {
     json_out(['ok' => true]);
 }
 
-$rows = $pdo->query('SELECT id, name, kind, aliases, polygon, lat, lng, color FROM zones ORDER BY name')->fetchAll();
+$rows = $pdo->query('SELECT id, name, kind, aliases, polygon, lat, lng, color, no_wait FROM zones ORDER BY name')->fetchAll();
 foreach ($rows as &$r) {
     $r['id'] = (int) $r['id'];
+    $r['no_wait'] = (int) $r['no_wait'];
     $r['aliases'] = json_decode($r['aliases'], true) ?: [];
     $r['polygon'] = $r['polygon'] ? json_decode($r['polygon'], true) : null;
     $r['lat'] = $r['lat'] === null ? null : (float) $r['lat'];

@@ -4,6 +4,7 @@ import { $, esc, cap, toast, parseCoords, centroid, getHere } from '../util.js';
 import { makeLocator, norm } from '../processor.js';
 import { runProcess } from './datos.js';
 import { standardize, planNames, keepOldName } from '../naming.js';
+import { alturasFor } from '../alturas.js';
 
 const CHALA = [-15.8565, -74.247];
 const LIBS = [
@@ -135,7 +136,7 @@ export async function renderZonas(view) {
         ? (z.lat != null ? '<span class="pill good">📍 lugar</span>' : '<span class="pill warn">lugar sin punto</span>')
         : (z.polygon ? '<span class="pill good">▢ zona</span>' : '<span class="pill warn">zona sin dibujar</span>');
       return `<button class="item" data-id="${z.id}" style="border:0;text-align:left;cursor:pointer;${selected?.id === z.id ? 'outline:2px solid var(--accent)' : ''}">
-        <div class="grow"><b>${esc(z.name)}</b> ${badge}
+        <div class="grow"><b>${esc(z.name)}</b> ${badge}${z.no_wait ? ' <span class="pill warn">no sugerir</span>' : ''}
           <div class="small sub">${c ? c.direct + ' pedidos' + (z.kind !== 'lugar' && c.calls > c.direct ? ` (+${c.calls - c.direct} de lugares dentro)` : '') : ''}${inside}</div>
           <div class="small muted">${esc(z.aliases.join(', '))}</div></div>
       </button>`;
@@ -163,6 +164,8 @@ export async function renderZonas(view) {
     if (!selected) { ed.hidden = true; return; }
     ed.hidden = false;
     const isPlace = selected.kind === 'lugar';
+    const waits = new Map((snap?.waitSpots || []).map(s => [s.zone, s.n]));
+    const alturas = isPlace ? [] : alturasFor(selected, zones, id => (counts.get(id)?.direct || 0) + (waits.get(id) || 0) * 0.25);
     ed.innerHTML = `
       <div class="card-head"><h2>${selected.id ? 'Editar' : 'Nuevo'} ${isPlace ? 'lugar' : 'zona'}</h2><button class="btn sm" id="zClose">Cerrar</button></div>
       <div style="display:grid;gap:10px">
@@ -175,6 +178,12 @@ export async function renderZonas(view) {
           <div class="row"><button class="btn" id="zHere">📍 Estoy aquí</button><button class="btn" id="zPick">Tocar en el mapa</button></div>
           <div class="small sub" id="zPointInfo"></div>`
         : `<div class="row"><button class="btn" id="zDraw">${selected.polygon ? 'Redibujar' : 'Dibujar'} en mapa</button>${selected.polygon ? '<button class="btn" id="zEdit">Mover puntos</button>' : ''}</div>`}
+        <label class="row" style="align-items:flex-start;flex-wrap:nowrap;cursor:pointer">
+          <input type="checkbox" id="zNoWait" style="width:auto;margin-top:3px" ${selected.no_wait ? 'checked' : ''}>
+          <span class="grow"><b>No sugerir como punto de espera</b>
+            <span class="small sub" style="display:block">${isPlace ? 'Este lugar no saldrá en las recomendaciones.' : alturas.length ? 'Calle larga: se recomendará a qué altura ponerte.' : 'No parece una calle larga o no tiene referencias cerca: se recomendarán los lugares que tiene dentro.'}</span>
+            <span class="small muted" id="zAlturas" style="display:block;margin-top:2px" ${selected.no_wait && alturas.length ? '' : 'hidden'}>${alturas.map(a => esc(a.name)).join(' · ')}</span></span>
+        </label>
         <div class="row">
           <span class="grow"></span>
           ${selected.id ? '<button class="btn danger" id="zDel">Eliminar</button>' : ''}
@@ -183,6 +192,7 @@ export async function renderZonas(view) {
       </div>`;
 
     const read = () => Object.assign(selected, { name: $('#zName').value.trim(), aliases: $('#zAliases').value.split(',').map(s => s.trim()).filter(Boolean) });
+    $('#zNoWait').onchange = e => { selected.no_wait = e.target.checked ? 1 : 0; $('#zAlturas').hidden = !selected.no_wait || !alturas.length; };
     $('#zClose').onclick = () => { stopTools(); selected = null; refresh(); };
     $('#zKind').onclick = e => {
       const k = e.target.dataset.k;

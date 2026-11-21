@@ -59,6 +59,10 @@ function ensure_schema(PDO $pdo): void
     if (!in_array('kind', $cols, true)) {
         $pdo->exec("ALTER TABLE zones ADD COLUMN kind VARCHAR(10) NOT NULL DEFAULT 'zona' AFTER name, ADD COLUMN lat DOUBLE NULL, ADD COLUMN lng DOUBLE NULL");
     }
+    // No sugerir como punto de espera (muy amplia): se recomiendan los lugares que tiene dentro.
+    if (!in_array('no_wait', $cols, true)) {
+        $pdo->exec("ALTER TABLE zones ADD COLUMN no_wait TINYINT(1) NOT NULL DEFAULT 0");
+    }
     $pdo->exec("CREATE TABLE IF NOT EXISTS push_subs (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         hash CHAR(40) NOT NULL,

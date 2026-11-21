@@ -4,8 +4,9 @@
 
 import { occurrences, slots } from './events.js';
 import { simulate, blendWait } from './sim.js';
+import { buildAlturas } from './alturas.js';
 
-export const LOGIC_VERSION = 9;
+export const LOGIC_VERSION = 11;
 
 export const CONFIG = {
   dispatchers: ['Transporte Los 5 De Oro', '+51 965 134 127'],
@@ -488,10 +489,18 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
     const rate = (o.w + 10 * gRate) / (o.t + 10);
     return { zone, n: o.n, paso: o.w ? +(o.paso / o.w).toFixed(2) : 0, rate: +rate.toFixed(2), bands: BANDS.map((_, b) => +((o.bw[b] + 3 * rate) / (o.bt[b] + 3)).toFixed(2)), bandN: o.bn };
   }).sort((a, b) => b.rate - a.rate || a.zone - b.zone);
+  const zoneCounts = {}, directCounts = {};
+  for (const c of allCalls) {
+    if (c.zone >= 0) zoneCounts[c.zone] = (zoneCounts[c.zone] || 0) + 1;
+    const d = c.spot >= 0 ? c.spot : c.zone;
+    if (d >= 0) directCounts[d] = (directCounts[d] || 0) + 1;
+  }
+  // Calles marcadas "no sugerir": alturas calculadas con las referencias más mencionadas en el chat.
+  const { alturas, hidden } = buildAlturas(zones, id => (directCounts[id] || 0) + (zw.get(id)?.n || 0) * 0.25, spotParent);
   // Simulador: mi taxi libre en cada punto del mapa, frente a los taxistas que estaban libres en cada pedido.
-  const sim = simulate({ calls: allCalls, libres, ocupados, senderName, zones, covered, bands: BANDS });
+  const sim = simulate({ calls: allCalls, libres, ocupados, senderName, zones: [...zones, ...alturas], covered, bands: BANDS, hidden });
   // Ranking final: lo real donde hay muchas esperas, el simulador donde hay pocas o ninguna.
-  const waitSpots = blendWait({ real: realSpots, sim, nB: BANDS.length, global: BANDS.map((_, b) => gW[b] / (gT[b] || 1)) });
+  const waitSpots = blendWait({ real: realSpots, sim, nB: BANDS.length, global: BANDS.map((_, b) => gW[b] / (gT[b] || 1)), zones, parentOf: spotParent, alturas, hidden });
   const waitInfo = { bands: BANDS, global: BANDS.map((_, b) => +(gW[b] / (gT[b] || 1)).toFixed(2)), rate: +gRate.toFixed(2) };
 
   // Lugares que no caen en ninguna zona (para que los asignes).
@@ -499,12 +508,6 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
   for (const c of allCalls) if (c.zone < 0 && c.place) unmatched.set(c.place, (unmatched.get(c.place) || 0) + 1);
   for (const l of libres) if (l.zone < 0 && l.place) unmatched.set(l.place, (unmatched.get(l.place) || 0) + 1);
   const unmatchedPlaces = [...unmatched.entries()].filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 300);
-  const zoneCounts = {}, directCounts = {};
-  for (const c of allCalls) {
-    if (c.zone >= 0) zoneCounts[c.zone] = (zoneCounts[c.zone] || 0) + 1;
-    const d = c.spot >= 0 ? c.spot : c.zone;
-    if (d >= 0) directCounts[d] = (directCounts[d] || 0) + 1;
-  }
 
   // ---------- clientes y hábitos ----------
   const byPhone = new Map();
@@ -711,8 +714,8 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
       dispatchers: [...dispatchers].sort(), libreReports: libres.length, waits: episodes.length,
       mappedSenders: senderName.size, zonedCalls: allCalls.filter(c => c.zone >= 0).length,
     },
-    zones: zones.map(z => ({ id: z.id, name: z.name, aliases: z.aliases || [], kind: z.kind || 'zona', color: z.color, polygon: z.polygon, lat: z.lat ?? null, lng: z.lng ?? null, parent: spotParent.get(z.id) ?? -1, calls: zoneCounts[z.id] || 0, direct: directCounts[z.id] || 0 })),
-    hourly, heatmap, heatCov, shifts, nap, drivers, parking, parkingWd, spotHeat, waitSpots, waitInfo, sim: { bands: sim.bands, samples: sim.samples, beta: sim.beta, nearFor: sim.nearFor, model: sim.model }, unmatchedPlaces, patterns, alerts, me: meStats,
+    zones: zones.map(z => ({ id: z.id, name: z.name, aliases: z.aliases || [], kind: z.kind || 'zona', no_wait: +z.no_wait ? 1 : 0, color: z.color, polygon: z.polygon, lat: z.lat ?? null, lng: z.lng ?? null, parent: spotParent.get(z.id) ?? -1, calls: zoneCounts[z.id] || 0, direct: directCounts[z.id] || 0 })),
+    hourly, heatmap, heatCov, shifts, nap, drivers, parking, parkingWd, spotHeat, waitSpots, waitInfo, alturas: alturas.map(({ members, ...a }) => a), sim: { bands: sim.bands, samples: sim.samples, beta: sim.beta, nearFor: sim.nearFor, model: sim.model }, unmatchedPlaces, patterns, alerts, me: meStats,
     events, eventStats,
     clients: clients.slice(0, 1500),
     dict: { phones, places, drivers: driverNames, chats },

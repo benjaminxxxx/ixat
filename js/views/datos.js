@@ -4,6 +4,7 @@ import { $, esc, toast, num } from '../util.js';
 import { parseWhatsApp } from '../parser.js';
 import { SEED_ZONES } from '../seedZones.js';
 import { LOGIC_VERSION } from '../processor.js';
+import { readChatFile } from '../zip.js';
 import { pushStatus, enablePush, testPush } from '../push.js';
 
 const BATCH = 3000;
@@ -56,9 +57,9 @@ export async function renderDatos(view) {
   view.innerHTML = `
     <section class="card">
       <h2>Subir chat</h2>
-      <p class="sub">Exporta el chat de WhatsApp <b>sin archivos</b> y sube el <b>.txt</b> completo. Los mensajes que ya estaban se ignoran solos, así que no hace falta recortar días.</p>
+      <p class="sub">Exporta el chat de WhatsApp <b>sin archivos</b> y sube el <b>.zip</b> tal cual, sin descomprimir (también acepta el .txt). Los mensajes que ya estaban se ignoran solos, así que no hace falta recortar días.</p>
       <div style="display:grid;gap:10px">
-        <input type="file" id="file" accept=".txt,text/plain">
+        <input type="file" id="file" accept=".zip,.txt,application/zip,application/x-zip-compressed,application/octet-stream,text/plain">
         <label class="field" id="chatField">Chat (se detecta solo; cámbialo solo si está mal)
           <select id="chat"><option value="dia">Grupo de día</option><option value="noche">Grupo de noche</option></select></label>
         <div id="preview" class="sub"></div>
@@ -114,14 +115,19 @@ export async function renderDatos(view) {
   $('#file').onchange = async e => {
     const f = e.target.files[0];
     if (!f) return;
-    const raw = await f.text();
+    parsed = null;
+    $('#upload').disabled = true;
+    $('#preview').textContent = 'Leyendo el chat…';
+    let chatFile;
+    try { chatFile = await readChatFile(f); }
+    catch (err) { $('#preview').innerHTML = `<span class="pill bad">${esc(err.message)}</span>`; return; }
+    const raw = chatFile.text;
     parsed = parseWhatsApp(raw);
     if (!parsed.length) {
-      $('#preview').innerHTML = '<span class="pill bad">No se reconoció el formato. ¿Es el .txt exportado de WhatsApp?</span>';
-      $('#upload').disabled = true;
+      $('#preview').innerHTML = '<span class="pill bad">No se reconoció el formato. ¿Es el chat exportado de WhatsApp?</span>';
       return;
     }
-    const det = await detectChat(f.name, raw, parsed);
+    const det = await detectChat(chatFile.name, raw, parsed);
     if (det.chat) $('#chat').value = det.chat;
     $('#preview').innerHTML = `${parsed.length.toLocaleString()} mensajes · del ${parsed[0].ts.slice(0, 16)} al ${parsed[parsed.length - 1].ts.slice(0, 16)}<br>`
       + (det.chat ? `<span class="pill good">${det.chat === 'dia' ? 'Grupo de día' : 'Grupo de noche'}</span> <span class="small">${esc(det.why)}</span>`

@@ -5,6 +5,8 @@ import { parseWhatsApp } from '../parser.js';
 import { SEED_ZONES } from '../seedZones.js';
 import { LOGIC_VERSION } from '../processor.js';
 import { readChatFile } from '../zip.js';
+
+const SHARE_INBOX = 'share-inbox'; // la llena sw.js al compartir desde WhatsApp
 import { pushStatus, enablePush, testPush } from '../push.js';
 
 const BATCH = 3000;
@@ -112,9 +114,9 @@ export async function renderDatos(view) {
 
   let parsed = null;
   const prog = $('#prog'), bar = prog.firstElementChild;
-  $('#file').onchange = async e => {
-    const f = e.target.files[0];
-    if (!f) return;
+  let sharedKey = null; // chat recibido desde WhatsApp: se borra de la bandeja cuando ya se subió
+  // Lee el archivo y devuelve qué chat es (o null si hay que elegirlo).
+  const loadFile = async f => {
     parsed = null;
     $('#upload').disabled = true;
     $('#preview').textContent = 'Leyendo el chat…';
@@ -133,7 +135,9 @@ export async function renderDatos(view) {
       + (det.chat ? `<span class="pill good">${det.chat === 'dia' ? 'Grupo de día' : 'Grupo de noche'}</span> <span class="small">${esc(det.why)}</span>`
         : '<span class="pill warn">No pude saber qué chat es: elígelo abajo</span>');
     $('#upload').disabled = false;
+    return det.chat;
   };
+  $('#file').onchange = e => { if (e.target.files[0]) loadFile(e.target.files[0]); };
 
   $('#upload').onclick = async e => {
     const btn = e.target;
@@ -151,6 +155,7 @@ export async function renderDatos(view) {
       }
       toast(`${added.toLocaleString()} mensajes nuevos`);
       if (added) await runProcess(msg => ($('#preview').textContent = msg));
+      if (sharedKey) await (await caches.open(SHARE_INBOX)).delete(sharedKey);
       renderDatos(view);
     } catch (err) {
       toast(err.message, 5000);
@@ -194,4 +199,18 @@ export async function renderDatos(view) {
     toast('Borrado');
     renderDatos(view);
   }));
+
+  // Chat compartido desde WhatsApp: se lee y se sube solo. Si no se sabe qué grupo es, espera a que lo elijas.
+  if ('caches' in window && getToken() && !authError) {
+    const box = await caches.open(SHARE_INBOX);
+    const [key] = await box.keys();
+    if (key) {
+      const res = await box.match(key);
+      const file = new File([await res.blob()], decodeURIComponent(res.headers.get('X-Name') || 'chat.zip'), { type: res.headers.get('Content-Type') || '' });
+      sharedKey = key;
+      const chat = await loadFile(file);
+      if (!parsed) { await box.delete(key); sharedKey = null; }
+      else if (chat) $('#upload').click();
+    }
+  }
 }

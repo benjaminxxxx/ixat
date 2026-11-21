@@ -5,7 +5,7 @@ import { zoneIndex, zoneLabel, goLink, homeLink, noData, hourBars, searchPlaces,
 import { pushStatus, enablePush, pushSupported } from '../push.js';
 import { loadHomes, loadNames } from '../homes.js';
 import { occurrences, slots, minToTime } from '../events.js';
-import { renderWaitCard } from './wait.js';
+import { renderWaitCard, demandPlace } from './wait.js';
 
 const AHEAD_MIN = 120; // mostrar lo que viene en las próximas 2 horas
 const BEHIND_MIN = 15; // y lo que debió pasar hace poco
@@ -106,7 +106,7 @@ export async function renderAhora(view) {
         <div class="card-head"><h2>De dónde salen los pedidos</h2><span class="sub">${wdPark ? dayName + ' ' : ''}${n.h}:00–${n.h + 1}:00</span></div>
         ${park.length ? `<table>
           <tr><th style="text-align:left">Zona</th><th>Pedidos/día</th><th></th></tr>
-          ${park.slice(0, 5).map(r => `<tr><td style="text-align:left">${zoneLabel(zones, r.zone)}</td><td>${num(r.callsPerDay, 1)}</td><td>${goLink(zones, r.zone)}</td></tr>`).join('')}
+          ${park.slice(0, 5).map(r => { const d = demandPlace(snap, zones, r.zone, n.h); return `<tr><td style="text-align:left">${d.label}</td><td>${num(r.callsPerDay, 1)}</td><td>${d.link}</td></tr>`; }).join('')}
         </table>
         <p class="small muted">Cuántos piden recojo en esa zona ${wdPark ? `los ${wdPlural(n.wd)} ` : ''}a esta hora. Que salgan muchos pedidos no significa que convenga esperar ahí: puede haber muchos taxis (mira “Dónde esperar”).</p>`
           : `<p class="sub">Aún no hay zonas con datos a esta hora. Registra zonas en <a href="#/zonas">Zonas</a>.</p>`}

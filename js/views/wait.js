@@ -106,6 +106,18 @@ export function renderWaitCard(el, snap, savedZones) {
   return draw;
 }
 
+// Para las tablas de demanda: una calle marcada no se muestra como destino, sino su mejor altura a esa hora.
+export function demandPlace(snap, zones, zoneId, h) {
+  const z = zones.get(zoneId);
+  if (!z?.no_wait) return { label: zoneLabel(zones, zoneId), link: goLink(zones, zoneId) };
+  const b = bandIdx(snap.waitInfo, h);
+  const ids = new Set((snap.alturas || []).filter(a => a.parent === zoneId).map(a => a.id));
+  const best = (snap.waitSpots || []).filter(s => ids.has(s.zone)).sort((x, y) => y.bands[b] - x.bands[b])[0];
+  if (!best) return { label: `${esc(z.name)} <span class="muted small">(falta indicar altura)</span>`, link: '' };
+  const all = withAlturas(snap, zones);
+  return { label: `${esc(all.get(best.zone).name)} <span class="muted small">· pedidos de toda la calle</span>`, link: goLink(all, best.zone) };
+}
+
 // Tabla para Análisis: minutos hasta conseguir servicio por zona y franja.
 export function waitTable(snap, savedZones) {
   if (!snap.waitSpots?.length) return '<p class="sub">Aún no hay datos suficientes.</p>';

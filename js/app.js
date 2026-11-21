@@ -6,6 +6,7 @@ import { renderClientes, renderCliente } from './views/clientes.js';
 import { renderZonas } from './views/zonas.js';
 import { renderDatos, runProcess } from './views/datos.js';
 import { renderEventos } from './views/eventos.js';
+import { LOGIC_VERSION } from './processor.js';
 
 // Estado compartido por todas las pantallas.
 export const state = { snap: null, loading: null };
@@ -54,11 +55,14 @@ export function reprocess() {
 async function checkStale(view) {
   let st;
   try { st = await api('stamp.php'); } catch { return; }
-  if (!st.stale || !view.isConnected || $('#staleBanner')) return;
+  // También si el análisis guardado se hizo con una versión anterior del cálculo.
+  const oldLogic = state.snap && state.snap.version !== LOGIC_VERSION;
+  if ((!st.stale && !oldLogic) || !view.isConnected || $('#staleBanner')) return;
   const el = document.createElement('section');
   el.className = 'card row';
   el.id = 'staleBanner';
-  el.innerHTML = '<div class="grow sub">Hiciste cambios (zonas, lugares, eventos o chats) después del último análisis. Las sugerencias aún no los incluyen.</div><button class="btn primary">Recalcular ahora</button>';
+  const why = oldLogic ? 'La app se actualizó y el análisis guardado es de la versión anterior.' : 'Hiciste cambios (zonas, lugares, eventos o chats) después del último análisis.';
+  el.innerHTML = `<div class="grow sub">${why} Las sugerencias aún no los incluyen.</div><button class="btn primary">Recalcular ahora</button>`;
   el.querySelector('button').onclick = e => { e.target.disabled = true; e.target.textContent = 'Recalculando…'; reprocess(); };
   view.prepend(el);
   if (reprocessing) { el.querySelector('button').disabled = true; el.querySelector('button').textContent = 'Recalculando…'; }

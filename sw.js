@@ -1,7 +1,8 @@
 // Service worker: abre la app sin señal, guarda el último análisis y muestra los avisos.
-const VERSION = 'v16';
+const VERSION = 'v17';
 const SHELL = `shell-${VERSION}`;
 const RUNTIME = 'runtime';
+const INBOX = 'share-inbox'; // chat recibido desde "Compartir" de WhatsApp, hasta que Datos lo suba
 const FILES = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon-192.png',
   'js/app.js', 'js/api.js', 'js/util.js', 'js/push.js', 'js/parser.js', 'js/processor.js', 'js/worker.js', 'js/seedZones.js', 'js/naming.js', 'js/homes.js', 'js/events.js',
@@ -16,10 +17,27 @@ self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('shell-') && k !== SHELL).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
+async function receiveShare(req) {
+  const home = new URL('./#/datos', self.registration.scope).href;
+  try {
+    const form = await req.formData();
+    const file = form.getAll('chat').find(f => f instanceof File && f.size);
+    if (file) {
+      const box = await caches.open(INBOX);
+      await Promise.all((await box.keys()).map(k => box.delete(k)));
+      await box.put(new URL('shared-chat', self.registration.scope).href, new Response(file, {
+        headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Name': encodeURIComponent(file.name) },
+      }));
+    }
+  } catch {}
+  return Response.redirect(home, 303);
+}
+
 self.addEventListener('fetch', e => {
   const req = e.request;
-  if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  if (req.method === 'POST' && url.searchParams.has('share-target')) { e.respondWith(receiveShare(req)); return; }
+  if (req.method !== 'GET') return;
 
   // El análisis: primero red, si no hay señal el último guardado.
   if (url.pathname.endsWith('/api/snapshot.php')) {

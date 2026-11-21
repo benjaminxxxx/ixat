@@ -2,7 +2,7 @@ import { loadSnapshot } from '../app.js';
 import { $, $$, esc, limaNow, hourLabel, pct, num, soles, cap, WD_LONG, bindTips, wdPlural } from '../util.js';
 import { zoneIndex, zoneLabel, goLink, noData, hourBars, placePoint } from './common.js';
 import { loadLibs } from './zonas.js';
-import { waitTable, withAlturas } from './wait.js';
+import { waitTable, withAlturas, demandPlace } from './wait.js';
 import { makeSimulator } from '../simview.js';
 
 const METRICS = {
@@ -117,7 +117,7 @@ export async function renderAnalisis(view) {
     drawMap();
     $('#parkTable').innerHTML = rows.length ? `<table>
       <tr><th>Zona</th><th>Pedidos/día</th><th>Éxito libres</th><th>Espera</th><th></th></tr>
-      ${rows.map(r => `<tr><td>${zoneLabel(zones, r.zone)}</td><td>${num(r.callsPerDay, 1)}</td><td>${pct(r.successRate)}</td><td>${r.medianWait == null ? '—' : num(r.medianWait, 0) + ' min'}</td><td>${goLink(zones, r.zone)}</td></tr>`).join('')}
+      ${rows.map(r => { const d = demandPlace(snap, zones, r.zone, parkHour); return `<tr><td>${d.label}</td><td>${num(r.callsPerDay, 1)}</td><td>${pct(r.successRate)}</td><td>${r.medianWait == null ? '—' : num(r.medianWait, 0) + ' min'}</td><td>${d.link}</td></tr>`; }).join('')}
     </table>` : '<p class="sub">Sin datos de zonas a esta hora.</p>';
   };
   $('#metricSeg').onclick = e => { const k = e.target.dataset.k; if (k) { metric = k; drawHours(); } };

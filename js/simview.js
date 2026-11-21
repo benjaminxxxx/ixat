@@ -1,5 +1,6 @@
 // Simular en el celular cualquier punto del mapa con el modelo que guarda el análisis (ver js/sim.js).
 import { placePoint } from './views/common.js';
+import { kmToSegment } from './sinDireccion.js';
 
 function km(a, b) {
   const R = 6371, r = x => x * Math.PI / 180;
@@ -14,7 +15,7 @@ export function makeSimulator(sim, zones) {
   const b = new Map(m.b), c = new Map(m.c.map(([A, L, v]) => [A + '|' + L, v]));
   const score = (A, L, LPt) => {
     const a = pt(A), q = LPt || pt(L);
-    const d = A === L ? 0 : a && q ? km(a, q) : null;
+    const d = A === L ? 0 : A === m.origin?.id ? (q ? kmToSegment(q, m.origin.seg) : null) : a && q ? km(a, q) : null;
     return (d == null ? m.miss : -m.beta * d) + (L != null ? (b.get(L) || 0) + (c.get(A + '|' + L) || 0) : 0);
   };
   // Punto tocado: si está a menos de 40 m de un lugar o zona conocida, se usa ese (con su fila de taxis).

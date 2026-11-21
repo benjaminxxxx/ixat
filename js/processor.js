@@ -5,8 +5,9 @@
 import { occurrences, slots } from './events.js';
 import { simulate, blendWait } from './sim.js';
 import { buildAlturas } from './alturas.js';
+import { isNoAddress, tramoOrigin } from './sinDireccion.js';
 
-export const LOGIC_VERSION = 11;
+export const LOGIC_VERSION = 12;
 
 export const CONFIG = {
   dispatchers: ['Transporte Los 5 De Oro', '+51 965 134 127'],
@@ -203,7 +204,7 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
       if (ph) {
         const phone = ph[1].replace(/\D/g, '');
         let place = /vcard/i.test(m.text) ? '' : norm(m.text.replace(ph[0], ' '));
-        if (place.split(' ').every(w => !w || EMPTY_PLACE_WORDS.has(w))) place = '';
+        if (place.split(' ').every(w => !w || EMPTY_PLACE_WORDS.has(w)) || isNoAddress(place)) place = '';
         const same = pend.find(p => p.phone === phone);
         if (same) { if (!same.place && place) { same.place = place; Object.assign(same, locate(place)); } continue; }
         const c = { chat: m.chat, ts: m.ts, t: m.t, date: m.date, h: m.h, mod: m.mod, wd: m.wd, phone, place, ...locate(place), driver: null, confirmT: null, cancelled: false };
@@ -498,7 +499,10 @@ export function processAll(rawMessages, zones, cfg = CONFIG, extra = {}) {
   // Calles marcadas "no sugerir": alturas calculadas con las referencias más mencionadas en el chat.
   const { alturas, hidden } = buildAlturas(zones, id => (directCounts[id] || 0) + (zw.get(id)?.n || 0) * 0.25, spotParent);
   // Simulador: mi taxi libre en cada punto del mapa, frente a los taxistas que estaban libres en cada pedido.
-  const sim = simulate({ calls: allCalls, libres, ocupados, senderName, zones: [...zones, ...alturas], covered, bands: BANDS, hidden });
+  // Los pedidos sin dirección compiten como si salieran del tramo Víctor Raúl–Llamosas.
+  const origin = tramoOrigin(zones);
+  const simCalls = origin ? allCalls.map(c => (!c.place && c.zone < 0 ? { ...c, zone: origin.id, spot: -1 } : c)) : allCalls;
+  const sim = simulate({ calls: simCalls, libres, ocupados, senderName, zones: [...zones, ...alturas, ...(origin ? [origin] : [])], covered, bands: BANDS, hidden, origin });
   // Ranking final: lo real donde hay muchas esperas, el simulador donde hay pocas o ninguna.
   const waitSpots = blendWait({ real: realSpots, sim, nB: BANDS.length, global: BANDS.map((_, b) => gW[b] / (gT[b] || 1)), zones, parentOf: spotParent, alturas, hidden });
   const waitInfo = { bands: BANDS, global: BANDS.map((_, b) => +(gW[b] / (gT[b] || 1)).toFixed(2)), rate: +gRate.toFixed(2) };

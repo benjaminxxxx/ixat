@@ -97,6 +97,10 @@ function ensure_schema(PDO $pdo): void
         note VARCHAR(200) NOT NULL DEFAULT '',
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    // Textos del chat marcados como "no es un lugar".
+    $pdo->exec("CREATE TABLE IF NOT EXISTS ignored_texts (
+        text VARCHAR(190) PRIMARY KEY
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin");
     $pdo->exec("CREATE TABLE IF NOT EXISTS push_log (
         alert_key VARCHAR(120) NOT NULL,
         sent_date DATE NOT NULL,

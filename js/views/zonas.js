@@ -5,6 +5,7 @@ import { makeLocator, norm } from '../processor.js';
 import { runProcess } from './datos.js';
 import { standardize, planNames, keepOldName } from '../naming.js';
 import { alturasFor } from '../alturas.js';
+import { pendingItems, suggestions } from '../pendientes.js';
 
 const CHALA = [-15.8565, -74.247];
 const LIBS = [
@@ -29,7 +30,8 @@ const round = p => [+p.lat.toFixed(7), +p.lng.toFixed(7)];
 const located = z => (z.kind === 'lugar' ? z.lat != null : !!(z.polygon && z.polygon.length >= 3));
 let listFilter = 'todas';
 let listQuery = '';
-let textQuery = '';
+let pendFilter = 'todo';
+let pendQuery = '';
 // Sin espacios: "coca" encuentra "cocacola" y "coca cola".
 const flat = t => norm(t).replace(/ /g, '');
 const hasText = (t, q) => flat(t).includes(flat(q));
@@ -37,22 +39,32 @@ const matchesQuery = (z, q) => !q || hasText(z.name, q) || z.aliases.some(a => h
 
 export async function renderZonas(view) {
   view.innerHTML = '<div class="card empty">Cargando mapa…</div>';
-  const [zonesRaw, snap] = await Promise.all([api('zones.php'), loadSnapshot().catch(() => null), loadLibs()]);
+  const [zonesRaw, snap, ignoredRaw] = await Promise.all([api('zones.php'), loadSnapshot().catch(() => null), api('ignored.php').catch(() => []), loadLibs()]);
   let zones = zonesRaw;
+  const ignored = new Set(ignoredRaw);
   const counts = new Map((snap?.zones || []).map(z => [z.id, z]));
   let selected = null;
   let drawer = null;
   let picking = false; // esperando un toque en el mapa para el punto de un lugar
 
   view.innerHTML = `
+    <section class="card" id="reproc" hidden>
+      <div class="row"><div class="grow sub">Hiciste cambios. Reprocesa para que el análisis los use.</div><button class="btn primary" id="reprocBtn">Reprocesar</button></div>
+    </section>
+    <section class="card" id="pendCard">
+      <div class="card-head"><h2>Pendientes</h2><span class="small sub">lo más usado primero</span></div>
+      <input type="search" id="pendQ" placeholder="Filtrar pendientes…" value="${esc(pendQuery)}" autocomplete="off" style="margin-bottom:8px">
+      <div class="seg" id="pendSeg" style="margin-bottom:8px"></div>
+      <div class="item" id="pendUndo" hidden style="margin-bottom:8px;outline:1px solid var(--accent)"><span class="grow small" id="pendUndoText"></span><button class="btn sm" id="pendUndoBtn">↩ Deshacer</button></div>
+      <datalist id="zoneNames"></datalist>
+      <div id="pendList" class="list" style="max-height:48vh;overflow-y:auto;overscroll-behavior:contain"></div>
+      <button class="btn sm" id="pendMore" hidden style="width:100%;margin-top:8px"></button>
+    </section>
     <section class="card" style="padding:10px">
       <div id="map"></div>
       <p class="small muted" style="margin:8px 4px 0" id="mapHelp">Toca una zona o lugar para editarlo. Capas (arriba a la derecha): calles o satélite.</p>
     </section>
     <section class="card" id="editor" hidden></section>
-    <section class="card" id="reproc" hidden>
-      <div class="row"><div class="grow sub">Hiciste cambios. Reprocesa para que el análisis los use.</div><button class="btn primary" id="reprocBtn">Reprocesar</button></div>
-    </section>
     <section class="card">
       <h3>Probar texto del chat</h3>
       <div class="row"><input class="grow" type="text" id="probe" placeholder="ej. alto paraiso, minera paraiso…"></div>
@@ -68,13 +80,7 @@ export async function renderZonas(view) {
       <div id="zoneList" class="list"></div>
       <div class="row" style="margin-top:10px"><span class="small sub grow">Nombres con su tipo: Hostal…, Grifo…, Grass… Los textos del chat se conservan.</span><button class="btn sm" id="tidy">🧹 Ordenar nombres</button></div>
     </section>
-    <section class="card">
-      <h2>Textos sin zona</h2>
-      <p class="sub">Lo que aparece en el chat y aún no se reconoce. Si estás ahí, toca <b>📍 Aquí</b>. Si no, pega la coordenada (o toca 🗺️) y toca <b>Crear lugar</b>. Si es otro nombre de algo que ya existe, búscalo en “Es igual a…”.</p>
-      <input type="search" id="tSearch" placeholder="Filtrar textos…" value="${esc(textQuery)}" style="margin-bottom:10px">
-      <datalist id="zoneNames"></datalist>
-      <div id="unmatched" class="list"></div>
-    </section>`;
+`;
 
   const map = L.map('map', { zoomControl: true, maxZoom: 21 }).setView(CHALA, 15);
   // maxNativeZoom: más allá de esto se agranda la última imagen disponible (permite acercar más).
@@ -261,18 +267,18 @@ export async function renderZonas(view) {
   const stopTools = () => {
     if (drawer) { drawer.disable(); drawer = null; }
     picking = false;
-    pickingText = null;
+    pickTarget = null;
     $('#mapHelp').textContent = 'Toca una zona o lugar para editarlo. Capas (arriba a la derecha): calles o satélite.';
   };
 
-  const refresh = () => { drawShapes(); showEditMarker(); drawEditor(); drawList(); drawUnmatched(); };
+  const refresh = () => { drawShapes(); showEditMarker(); drawEditor(); drawList(); drawPending(); };
 
   map.on('click', async e => {
-    if (pickingText) {
-      const text = pickingText;
-      pickingText = null;
+    if (pickTarget) {
+      const target = pickTarget;
       stopTools();
-      await createPlace(text, round(e.latlng));
+      try { await applyPoint(target, round(e.latlng)); } catch (err) { toast(err.message, 5000); }
+      $('#pendCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
     if (!picking || !selected) return;
@@ -308,7 +314,6 @@ export async function renderZonas(view) {
   $('#zoneList').onclick = e => { const b = e.target.closest('[data-id]'); if (b) select(+b.dataset.id); };
   $('#listSeg').onclick = e => { if (e.target.dataset.f) { listFilter = e.target.dataset.f; drawList(); } };
   $('#zSearch').oninput = e => { listQuery = e.target.value; drawList(); };
-  $('#tSearch').oninput = e => { textQuery = e.target.value; drawUnmatched(); };
   $('#tidy').onclick = async e => {
     const plan = planNames(zones);
     if (!plan.length) return toast('Todos los nombres ya están en orden');
@@ -343,124 +348,162 @@ export async function renderZonas(view) {
       : `▢ Zona <b>${esc(nameOf(r.zone))}</b>`;
   };
 
-  // Textos sin zona: por defecto se crean como lugar (pegando su coordenada o tocando el mapa).
-  // También se pueden asignar como palabra clave de algo existente, o crear como zona.
-  let pickingText = null; // texto esperando un toque en el mapa para crear su lugar
-  let pending = []; // textos sin zona que aún no se crean
-  const drawUnmatched = () => {
-    const known = new Set(zones.flatMap(z => [norm(z.name), ...z.aliases.map(a => norm(a))]));
-    const list = (snap?.unmatchedPlaces || []).filter(([p]) => !known.has(p));
-    pending = list;
-    // Sugerencias: lugares y zonas creados, y también los otros textos pendientes (para agruparlos en un lugar nuevo).
+  // ---- Pendientes: una sola lista con filtros; cada acción la saca de la lista y se puede deshacer ----
+  let pickTarget = null; // { text } o { id }: esperando un toque en el mapa
+  let pendItems = [];
+  let pendLimit = 40;
+  let openKey = null; // fila con las opciones extra abiertas
+  let undo = null;
+  const TAGS = { texto: ['Sin registrar', 'warn'], punto: ['Sin punto', 'bad'], dibujo: ['Sin dibujar', 'bad'] };
+  const itemOf = key => pendItems.find(i => i.key === key);
+  const zoneOf = id => zones.find(z => z.id === id);
+  const reloadZones = async () => { zones = await api('zones.php'); markDirty(); };
+  const done = (label, run) => { undo = { label, run }; refresh(); };
+
+  const rowHtml = it => {
+    const [tag, cls] = TAGS[it.type];
+    const chips = it.type === 'dibujo' ? [] : suggestions(it, zones, pendItems);
+    const canPoint = it.type !== 'dibujo';
+    return `<div class="item" data-key="${esc(it.key)}" style="display:block">
+      <div class="row"><b class="grow">${esc(it.name)}</b><span class="pill ${cls}">${tag}</span><span class="small muted">${it.n} veces</span></div>
+      ${chips.length ? `<div class="row" style="margin-top:6px"><span class="small sub">¿Es igual a?</span>${chips.map(c => `<button class="btn sm primary" data-act="merge" data-to="${esc(c.key)}">${esc(c.name)}</button>`).join('')}</div>` : ''}
+      <div class="row" style="margin-top:6px">
+        ${canPoint ? '<button class="btn sm" data-act="here">📍 Estoy aquí</button><button class="btn sm" data-act="pick">🗺️ Marcar</button>' : '<button class="btn sm primary" data-act="draw">▢ Dibujar</button>'}
+        <button class="btn sm" data-act="more">${openKey === it.key ? 'Menos' : 'Más…'}</button>
+        ${it.type === 'texto' ? '<button class="btn sm" data-act="ignore" style="margin-left:auto">🚫 No es lugar</button>' : '<button class="btn sm" data-act="edit" style="margin-left:auto">Editar</button>'}
+      </div>
+      ${openKey === it.key ? `<div style="display:grid;gap:6px;margin-top:6px">
+        ${canPoint ? `<div class="row"><input class="grow" type="text" data-coords placeholder="Pegar coordenada o enlace de Maps" style="min-width:0"><button class="btn sm primary" data-act="coords">Usar</button></div>` : ''}
+        <div class="row"><input class="grow" type="search" data-assign list="zoneNames" placeholder="Es igual a… (busca el nombre)" style="min-width:0"><button class="btn sm" data-act="same">Unir</button></div>
+        ${it.type === 'texto' ? '<div class="row"><button class="btn sm" data-act="nopoint">Crear sin punto</button><button class="btn sm" data-act="zona">▢ Es una zona</button></div>' : ''}
+      </div>` : ''}
+    </div>`;
+  };
+
+  const drawPending = () => {
+    pendItems = pendingItems(zones, snap?.unmatchedPlaces || [], counts, ignored);
+    const total = t => pendItems.filter(i => t === 'todo' || i.type === t).length;
+    $('#pendSeg').innerHTML = [['todo', 'Todo'], ['texto', 'Sin registrar'], ['punto', 'Sin punto'], ['dibujo', 'Sin dibujar']]
+      .map(([k, l]) => `<button data-f="${k}" class="${pendFilter === k ? 'on' : ''}">${l} ${total(k)}</button>`).join('');
     $('#zoneNames').innerHTML = [...zones].sort((a, b) => a.name.localeCompare(b.name))
       .map(z => `<option value="${esc(z.name)}">${z.kind === 'lugar' ? '📍 lugar' : '▢ zona'}${z.aliases.length ? ' · ' + esc(z.aliases.slice(0, 3).join(', ')) : ''}</option>`).join('')
-      + list.map(([p, n]) => `<option value="${esc(cap(p))}">📝 texto pendiente · ${n} veces</option>`).join('');
-    const tq = norm(textQuery);
-    $('#unmatched').innerHTML = list.filter(([p]) => !tq || hasText(p, tq)).slice(0, 80).map(([p, n]) => `
-      <div class="item" data-p="${esc(p)}" style="display:block">
-        <div class="row"><b class="grow">${esc(cap(p))}</b>${(n => n !== cap(p) ? `<span class="small sub">→ ${esc(n)}</span>` : '')(standardize({ name: p, aliases: [p] }).name)}<span class="small muted">${n} veces</span></div>
-        <div class="row" style="margin-top:6px">
-          <input class="grow" type="text" data-coords placeholder="Pegar coordenada o enlace de Maps" style="min-width:0">
-          <button class="btn sm" data-act="here" title="Estoy aquí: usar mi ubicación">📍 Aquí</button>
-          <button class="btn sm" data-act="pick" title="Marcar tocando el mapa">🗺️</button>
-          <button class="btn sm primary" data-act="lugar">📍 Crear lugar</button>
-        </div>
-        <div class="small sub" data-info style="margin-top:4px"></div>
-        <div class="row" style="margin-top:6px">
-          <input class="grow" type="search" data-assign list="zoneNames" placeholder="Es igual a… (busca el nombre)" style="min-width:0">
-          <button class="btn sm" data-act="same">Asociar</button>
-          <button class="btn sm" data-act="zona" title="Es un área: crear zona y dibujarla">▢ Zona</button>
-        </div>
-      </div>`).join('') || '<p class="sub">Nada pendiente (o falta procesar).</p>';
+      + pendItems.filter(i => i.type === 'texto').map(i => `<option value="${esc(i.name)}">📝 texto pendiente · ${i.n} veces</option>`).join('');
+    const shown = pendItems.filter(i => (pendFilter === 'todo' || i.type === pendFilter) && (!pendQuery.trim() || hasText(i.name, pendQuery)));
+    const list = $('#pendList'), top = list.scrollTop;
+    list.innerHTML = shown.slice(0, pendLimit).map(rowHtml).join('') || '<div class="empty"><b>Nada pendiente aquí</b>Si subiste chats nuevos, recalcula para ver sus textos.</div>';
+    list.scrollTop = top;
+    $('#pendMore').hidden = shown.length <= pendLimit;
+    $('#pendMore').textContent = `Ver más (${shown.length - pendLimit})`;
+    const bar = $('#pendUndo');
+    bar.hidden = !undo;
+    if (undo) $('#pendUndoText').textContent = undo.label;
   };
 
-  const createPlace = async (text, ll) => {
+  const createFromText = async (text, ll) => {
     const z = await save({ id: 0, kind: 'lugar', name: standardize({ name: text, aliases: [text] }).name, aliases: [text], polygon: null, lat: ll ? ll[0] : null, lng: ll ? ll[1] : null });
     const p = ll ? geo().container(ll[0], ll[1]) : -1;
-    toast(`📍 ${z.name} creado${!ll ? ' sin punto (complétalo luego)' : p >= 0 ? ` · dentro de ${nameOf(p)}` : ''}`, 3500);
-    refresh();
+    done(`${z.name} creado${!ll ? ' sin punto' : p >= 0 ? ` · dentro de ${nameOf(p)}` : ''}`, async () => { await api('zones.php?id=' + z.id, { method: 'DELETE' }); await reloadZones(); });
+  };
+  const setPoint = async (id, ll) => {
+    const z = zoneOf(id);
+    await save({ ...z, lat: ll[0], lng: ll[1] });
+    const p = geo().container(ll[0], ll[1]);
+    done(`${z.name} ubicado${p >= 0 ? ` · dentro de ${nameOf(p)}` : ''}`, async () => { await save({ ...z, lat: null, lng: null }); });
+  };
+  const applyPoint = (target, ll) => (target.text ? createFromText(target.text, ll) : setPoint(target.id, ll));
+
+  // Une un pendiente con una zona, un lugar u otro texto.
+  const mergeInto = async (it, toKey) => {
+    if (toKey.startsWith('t:')) {
+      const other = itemOf(toKey);
+      const z = await save({ id: 0, kind: 'lugar', name: standardize({ name: other.text, aliases: [other.text] }).name, aliases: [other.text, it.text], polygon: null, lat: null, lng: null });
+      return done(`${z.name} creado con “${it.name}” y “${other.name}”. Falta su punto`, async () => { await api('zones.php?id=' + z.id, { method: 'DELETE' }); await reloadZones(); });
+    }
+    const target = zoneOf(+toKey.slice(2));
+    const before = [...target.aliases];
+    if (it.type === 'texto') {
+      await save({ ...target, aliases: [...before, it.text] });
+      return done(`“${it.name}” ahora cuenta como ${target.name}`, async () => { await save({ ...target, aliases: before }); });
+    }
+    // Un registro repetido: pasa sus textos al otro y se elimina.
+    const dup = zoneOf(it.id);
+    const events = await api('events.php');
+    if (events.some(ev => ev.zone_id === dup.id)) return toast(`${dup.name} se usa en un evento: cámbialo primero`, 4500);
+    await save({ ...target, aliases: [...new Set([...before, norm(dup.name), ...dup.aliases])] });
+    await api('zones.php?id=' + dup.id, { method: 'DELETE' });
+    await reloadZones();
+    if (selected?.id === dup.id) selected = null;
+    done(`${dup.name} unido a ${target.name}`, async () => {
+      await api('zones.php', { method: 'POST', body: { ...dup, id: 0 } });
+      await save({ ...target, aliases: before });
+    });
+  };
+  // "Es igual a…" escrito a mano: nombre exacto, texto del chat o el parecido más corto.
+  const resolveTarget = (it, typed) => {
+    const v = norm(typed);
+    if (!v) return null;
+    const text = it.type === 'texto' && pendItems.find(i => i.type === 'texto' && i.key !== it.key && i.text === v);
+    if (text) return text.key;
+    const z = zones.find(x => x.id !== it.id && norm(x.name) === v) || zones.filter(x => x.id !== it.id && matchesQuery(x, v)).sort((a, b) => a.name.length - b.name.length)[0];
+    return z ? 'z:' + z.id : null;
   };
 
-  // Al pegar/escribir una coordenada, mostrar en qué zona caería.
-  $('#unmatched').oninput = e => {
-    if (!e.target.matches('[data-coords]')) return;
-    const row = e.target.closest('[data-p]'), info = row.querySelector('[data-info]');
-    const ll = parseCoords(e.target.value);
-    if (!e.target.value.trim()) { info.textContent = ''; return; }
-    if (!ll) { info.innerHTML = '<span class="pill warn">coordenada no reconocida</span>'; return; }
-    const p = geo().container(ll[0], ll[1]);
-    info.innerHTML = p >= 0 ? `queda dentro de <b>${esc(nameOf(p))}</b>` : 'fuera de toda zona';
+  $('#pendSeg').onclick = e => { const f = e.target.dataset.f; if (f) { pendFilter = f; pendLimit = 40; $('#pendList').scrollTop = 0; drawPending(); } };
+  $('#pendQ').oninput = e => { pendQuery = e.target.value; pendLimit = 40; $('#pendList').scrollTop = 0; drawPending(); };
+  $('#pendMore').onclick = () => { pendLimit += 40; drawPending(); };
+  $('#pendUndoBtn').onclick = async e => {
+    if (!undo) return;
+    e.target.disabled = true;
+    try { await undo.run(); undo = null; toast('Deshecho'); refresh(); }
+    catch (err) { toast(err.message, 5000); }
+    e.target.disabled = false;
   };
-  $('#unmatched').onkeydown = e => {
+  $('#pendList').onkeydown = e => {
     if (e.key !== 'Enter') return;
-    const row = e.target.closest('[data-p]');
-    if (e.target.matches('[data-coords]')) row.querySelector('[data-act="lugar"]').click();
+    const row = e.target.closest('[data-key]');
+    if (e.target.matches('[data-coords]')) row.querySelector('[data-act="coords"]').click();
     if (e.target.matches('[data-assign]')) row.querySelector('[data-act="same"]').click();
   };
-
-  $('#unmatched').onclick = async e => {
+  $('#pendList').onclick = async e => {
     const btn = e.target.closest('button[data-act]');
     if (!btn) return;
-    const row = btn.closest('[data-p]'), text = row.dataset.p;
-    if (btn.dataset.act === 'lugar') {
-      const raw = row.querySelector('[data-coords]').value.trim();
-      const ll = parseCoords(raw);
-      if (raw && !ll) return toast('No reconocí la coordenada. Ej: -15.847427, -74.257044', 4000);
-      btn.disabled = true;
-      await createPlace(text, ll);
-    } else if (btn.dataset.act === 'here') {
-      // Estoy en el lugar: tomar el GPS y crearlo de una vez.
-      btn.disabled = true;
-      const info = row.querySelector('[data-info]');
-      try {
-        const r = await getHere({ onUpdate: x => (info.textContent = `Buscando señal GPS… ±${x.acc} m`) });
-        await createPlace(text, [r.lat, r.lng]);
-        toast(`📍 ${cap(text)} guardado aquí (±${r.acc} m)`, 3500);
-      } catch (err) { toast(err.message, 5000); info.textContent = ''; btn.disabled = false; }
-    } else if (btn.dataset.act === 'same') {
-      await assignTo(row, text);
-    } else if (btn.dataset.act === 'zona') {
-      await createZoneFrom(text);
-    } else if (btn.dataset.act === 'pick') {
+    const row = btn.closest('[data-key]'), it = itemOf(row.dataset.key), act = btn.dataset.act;
+    if (!it) return;
+    const target = it.type === 'texto' ? { text: it.text } : { id: it.id };
+    if (act === 'more') { openKey = openKey === it.key ? null : it.key; return drawPending(); }
+    if (act === 'edit') return select(it.id);
+    if (act === 'draw') { select(it.id); return $('#zDraw').click(); }
+    if (act === 'pick') {
       stopTools();
-      pickingText = text;
-      $('#mapHelp').innerHTML = `<b>Toca el mapa donde está “${esc(cap(text))}”.</b>`;
-      $('#map').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      pickTarget = target;
+      $('#mapHelp').innerHTML = `<b>Toca el mapa donde está “${esc(it.name)}”.</b>`;
+      return $('#map').scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  };
-
-  const assignTo = async (row, text) => {
-    const v = norm(row.querySelector('[data-assign]').value);
-    if (!v) return toast('Escribe el nombre y elígelo de la lista');
-    const others = pending.map(([p]) => p).filter(p => p !== text);
-    const exactText = others.find(p => p === v);
-    const z = !exactText && (zones.find(x => norm(x.name) === v) || zones.filter(x => matchesQuery(x, v)).sort((a, b) => a.name.length - b.name.length)[0]);
-    if (!z) {
-      // Es igual a otro texto pendiente: se crea un solo lugar con los dos.
-      const other = exactText || others.find(p => hasText(p, v)); // la lista viene ordenada por más usado
-      if (!other) return toast('No encontré ese nombre', 3000);
-      const otherRow = [...document.querySelectorAll('#unmatched [data-p]')].find(r => r.dataset.p === other);
-      const ll = parseCoords(row.querySelector('[data-coords]').value) || (otherRow && parseCoords(otherRow.querySelector('[data-coords]').value));
-      const nz = await save({ id: 0, kind: 'lugar', name: standardize({ name: other, aliases: [other] }).name, aliases: [other, text], polygon: null, lat: ll ? ll[0] : null, lng: ll ? ll[1] : null });
-      toast(`📍 ${nz.name} creado con "${cap(other)}" y "${cap(text)}"${ll ? '' : ' · ponle su punto en la lista'}`, 4500);
-      refresh();
-      return;
-    }
-    await save({ ...z, aliases: [...z.aliases, text] });
-    toast(`"${cap(text)}" ahora cuenta como ${z.name}`);
-    refresh();
-  };
-  $('#unmatched').addEventListener('change', e => {
-    // Al elegir una sugerencia de la lista, asociar enseguida.
-    if (e.target.matches('[data-assign]') && (zones.some(x => x.name === e.target.value) || pending.some(([p]) => cap(p) === e.target.value))) { const row = e.target.closest('[data-p]'); assignTo(row, row.dataset.p); }
-  });
-  const createZoneFrom = async text => {
-    {
-      selected = await save({ id: 0, kind: 'zona', name: cap(text), aliases: [text], polygon: null, lat: null, lng: null });
-      toast('Zona creada: ahora dibújala', 4000);
-      refresh();
-      $('#editor').scrollIntoView({ behavior: 'smooth' });
-    }
+    btn.disabled = true;
+    try {
+      if (act === 'merge') await mergeInto(it, btn.dataset.to);
+      else if (act === 'here') { const r = await getHere({ onUpdate: x => (btn.textContent = `±${x.acc} m…`) }); await applyPoint(target, [r.lat, r.lng]); }
+      else if (act === 'coords') {
+        const ll = parseCoords(row.querySelector('[data-coords]').value);
+        if (!ll) { btn.disabled = false; return toast('No reconocí la coordenada. Ej: -15.847427, -74.257044', 4000); }
+        await applyPoint(target, ll);
+      } else if (act === 'same') {
+        const to = resolveTarget(it, row.querySelector('[data-assign]').value);
+        if (!to) { btn.disabled = false; return toast('No encontré ese nombre', 3000); }
+        await mergeInto(it, to);
+      } else if (act === 'nopoint') await createFromText(it.text, null);
+      else if (act === 'zona') {
+        selected = await save({ id: 0, kind: 'zona', name: cap(it.text), aliases: [it.text], polygon: null, lat: null, lng: null });
+        const id = selected.id;
+        done(`Zona ${selected.name} creada: dibújala`, async () => { await api('zones.php?id=' + id, { method: 'DELETE' }); selected = null; await reloadZones(); });
+        $('#zDraw').click();
+      } else if (act === 'ignore') {
+        await api('ignored.php', { method: 'POST', body: { text: it.text } });
+        ignored.add(it.text);
+        done(`“${it.name}” no volverá a salir`, async () => { await api('ignored.php?text=' + encodeURIComponent(it.text), { method: 'DELETE' }); ignored.delete(it.text); });
+      }
+      openKey = null;
+    } catch (err) { toast(err.message, 5000); btn.disabled = false; drawPending(); }
   };
 
   refresh();

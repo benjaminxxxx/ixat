@@ -9,6 +9,8 @@
 //    libres en ese momento, y se calcula la probabilidad de que me lo hubieran dado.
 //    Así se compara cualquier punto, incluso uno donde nadie suele esperar.
 
+import { kmToSegment } from './sinDireccion.js';
+
 const T = globalThis.__SIM || {}; // solo para pruebas
 const LIBRE_MIN = T.libreMin ?? 10;   // un "libre" vale 10 min (o hasta que consiga servicio o diga ocupado); probado: 10 acierta más que 20
 const ITERS = 250;      // pasadas de aprendizaje
@@ -36,7 +38,7 @@ const uniq = a => [...new Set(a)];
 // calls: pedidos (con zone, spot, driver, confirmT, cancelled, t, h, chat, date)
 // libres: reportes "libre" (sender, chat, t, zone, spot); ocupados: {sender, chat, t}
 // senderName: remitente → nombre de taxista; covered: Set('fecha|hora')
-export function simulate({ calls, libres, ocupados, senderName, zones, covered, bands, hidden = new Set() }) {
+export function simulate({ calls, libres, ocupados, senderName, zones, covered, bands, hidden = new Set(), origin = null }) {
   const pt = new Map();
   for (const z of zones) { const p = pointOf(z); if (p) pt.set(z.id, p); }
   const locOf = x => (x.spot >= 0 ? x.spot : x.zone);
@@ -75,7 +77,12 @@ export function simulate({ calls, libres, ocupados, senderName, zones, covered, 
 
   // ---- cercanías: puntaje(A, L) = −β·distancia + corrección del punto L + corrección del par (A, L) ----
   // La central elige el punto con mayor puntaje (probabilidad ∝ e^puntaje). Se aprende con el chat.
-  const dist = (A, L) => { if (A === L) return 0; const a = pt.get(A), b = pt.get(L); return a && b ? km(a, b) : null; };
+  const dist = (A, L) => {
+    if (A === L) return 0;
+    const a = pt.get(A), b = pt.get(L);
+    if (origin && A === origin.id) return b ? kmToSegment(b, origin.seg) : null; // pedido sin dirección: sale del tramo
+    return a && b ? km(a, b) : null;
+  };
   const P = { beta: 1, miss: 0, b: new Map(), c: new Map() };
   const pk = (A, L) => A + '|' + L;
   const score = (A, L) => {
@@ -118,7 +125,7 @@ export function simulate({ calls, libres, ocupados, senderName, zones, covered, 
   // ---- simulación: mi taxi libre en cada punto del mapa ----
   const presByLoc = new Map();
   for (const s of samples) for (const L of [s.win, ...s.comps]) presByLoc.set(L, (presByLoc.get(L) || 0) + 1);
-  const cands = [...pt.keys()];
+  const cands = [...pt.keys()].filter(id => id !== origin?.id); // el tramo es origen de pedidos, no un sitio para esperar
   const nB = bands.length;
   const callsB = Array(nB).fill(0), covB = Array(nB).fill(0), sampB = Array(nB).fill(0);
   for (const c of calls) if (!c.cancelled) callsB[bandOf(c.h)]++;
@@ -156,6 +163,7 @@ export function simulate({ calls, libres, ocupados, senderName, zones, covered, 
     c: [...P.c].filter(([, v]) => Math.abs(v) > 0.02).map(([k, v]) => [...k.split('|').map(Number), r3(v)]),
     samples: samples.map(s => [s.A, s.b, s.win, ...s.comps]),
     callsB, covB, sampB,
+    ...(origin ? { origin: { id: origin.id, seg: origin.seg } } : {}),
   };
   return {
     bands, samples: samples.length, fitted: fit.length, beta: +P.beta.toFixed(2),

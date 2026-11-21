@@ -185,7 +185,7 @@ export async function renderAnalisis(view) {
       $('#simOut').innerHTML = `<b>Esperando en ${nm}</b>
         <table style="margin-top:6px"><tr>${bandsInfo.map(([a, b]) => `<th>${a}–${b}h</th>`).join('')}</tr>
         <tr>${r.minutes.map(v => `<td>${fmtMin(v)} min</td>`).join('')}</tr></table>
-        <p class="small">Te tocarían sobre todo pedidos de: ${r.top.map(([A, f]) => `<b>${esc(zones.get(A)?.name || '?')}</b> ${Math.round(f * 100)}%`).join(', ')}</p>
+        <p class="small">Te tocarían sobre todo pedidos de: ${r.top.map(([A, f]) => `<b>${esc(zones.get(A)?.name || (A === snap.sim.model.origin?.id ? 'Sin dirección (encargos)' : '?'))}</b> ${Math.round(f * 100)}%`).join(', ')}</p>
         <p class="small muted">Simulado: solo cuenta pedidos de la central (ajustado a la escala real). Compáralo con “Dónde esperar”, que mezcla lo real.</p>`;
       marker.setLatLng(ll).addTo(smap);
     };
